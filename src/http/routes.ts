@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { verifyMessage } from 'ethers';
 import { env } from '../config/env';
+import { getFoundryConfigResponse } from '../config/foundry';
 import { buildSignMessage, consumeNonce, issueNonce, peekNonce } from '../auth/nonce';
 import { signAuthToken } from '../auth/jwt';
 
@@ -21,12 +22,18 @@ export function createHttpRouter(): Router {
     res.json({
       data: {
         requireMetaMaskSign: true,
-        maps: ['citaadel'],
+        maps: ['citaadel', 'aarena'],
         netcode: 'colyseus',
         colyseusUrl: env.publicUrl,
         roomName: 'citaadel',
+        // Keep false until AarenaRoom is deployed and join is verified, then flip true.
+        combatIsLive: env.combatIsLive,
       },
     });
+  });
+
+  router.get('/foundry/config', (_req, res) => {
+    res.json(getFoundryConfigResponse());
   });
 
   router.get('/user/nonce/get', (req: Request, res: Response) => {
@@ -98,6 +105,49 @@ export function createHttpRouter(): Router {
   });
 
   /**
+   * Base migration: equip/unequip no longer requires a REALM backend signer.
+   * Return empty `0x` signatures so legacy FE clients that still call this
+   * endpoint can batchEquip without crashing.
+   */
+  router.post('/realm/installation/signature/equip/get', (req: Request, res: Response) => {
+    const { parcelId, gotchiId, itemId, x, y } = req.body || {};
+    if (
+      parcelId === undefined ||
+      gotchiId === undefined ||
+      itemId === undefined ||
+      x === undefined ||
+      y === undefined
+    ) {
+      res.status(400).json({ error: 'parcelId, gotchiId, itemId, x, y are required' });
+      return;
+    }
+    res.json({
+      signature: '0x',
+      network: 'base',
+      note: 'Empty signature for Base RealmDiamond equip/unequip',
+      data: { parcelId, gotchiId, itemId, x, y },
+    });
+  });
+
+  /**
+   * Base migration: channelAlchemica / claimAvailableAlchemica accept empty `0x`.
+   * Stub for FE clients that still hit the legacy signature endpoint.
+   */
+  router.post('/realm/alchemica/signature/channel/get', (req: Request, res: Response) => {
+    const { parcelId, gotchiId, lastChanneled } = req.body || {};
+    if (parcelId === undefined || gotchiId === undefined || lastChanneled === undefined) {
+      res.status(400).json({ error: 'parcelId, gotchiId, lastChanneled are required' });
+      return;
+    }
+    res.json({
+      signature: '0x',
+      network: 'base',
+      note: 'Empty signature for Base RealmDiamond channel/claim',
+      data: { parcelId, gotchiId, lastChanneled },
+    });
+  });
+
+  /**
    * Compatibility shim for the legacy FE socket lookup.
    * Returns Colyseus endpoint info instead of a raw zone WebSocket URL.
    */
@@ -105,11 +155,12 @@ export function createHttpRouter(): Router {
     const owner = String(req.query.owner || '');
     const gotchi = String(req.query.gotchi || '');
     const map = String(req.query.map || 'citaadel');
+    const roomName = map === 'aarena' ? 'aarena' : 'citaadel';
 
     res.json({
       socketUrl: env.publicUrl,
-      id: 'citaadel-0',
-      roomName: map === 'aarena' ? 'citaadel' : 'citaadel',
+      id: `${roomName}-0`,
+      roomName,
       netcode: 'colyseus',
       owner,
       gotchi,
