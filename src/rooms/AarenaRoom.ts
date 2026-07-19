@@ -4,6 +4,7 @@ import { Player } from '../schema/Player';
 import { verifyAuthToken } from '../auth/jwt';
 import { assertGotchiOwnedBy } from '../auth/ownership';
 import { AARENA_BOUNDS, AARENA_SPAWN, MOVE } from '../config/env';
+import { CombatHandle, registerCombatMessages } from '../combat/registerCombat';
 
 type JoinOptions = {
   token?: string;
@@ -33,14 +34,17 @@ export class AarenaRoom extends Room<AarenaState> {
   maxClients = 200;
   private lastMoveAt = new Map<string, number>();
   private joinedAt = new Map<string, number>();
+  private combat: CombatHandle | null = null;
 
   onCreate() {
     this.setState(new AarenaState());
     this.setMetadata({ mapId: 'aarena' });
+    this.combat = registerCombatMessages(this);
 
     this.onMessage('move', (client, message: { x?: number; y?: number }) => {
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
+      if (this.combat?.isRushing(client.sessionId)) return;
       if (typeof message?.x !== 'number' || typeof message?.y !== 'number') return;
       if (!Number.isFinite(message.x) || !Number.isFinite(message.y)) return;
 
@@ -106,8 +110,14 @@ export class AarenaRoom extends Room<AarenaState> {
   }
 
   onLeave(client: Client) {
+    this.combat?.onPlayerLeave(client.sessionId);
     this.state.players.delete(client.sessionId);
     this.lastMoveAt.delete(client.sessionId);
     this.joinedAt.delete(client.sessionId);
+  }
+
+  onDispose() {
+    this.combat?.dispose();
+    this.combat = null;
   }
 }

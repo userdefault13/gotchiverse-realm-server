@@ -17,8 +17,15 @@ npm install
 npm run dev
 ```
 
+Or start BE + sibling FE together (expects `../gotchiverse-2d`):
+
+```bash
+npm run dev:all
+```
+
 - HTTP health: `http://localhost:2567/health`
 - Colyseus: `ws://localhost:2567` (rooms `citaadel`, `aarena`)
+- FE: `http://localhost:3001` (when using `dev:all`)
 
 Point the FE at:
 
@@ -27,6 +34,7 @@ NEXT_PUBLIC_API_URL=http://localhost:2567
 NEXT_PUBLIC_COLYSEUS_URL=http://localhost:2567
 NEXT_PUBLIC_NETCODE=colyseus
 ```
+
 
 ## Auth flow
 
@@ -75,6 +83,10 @@ curl -s https://api.yourdomain.com/health
 | `SKIP_OWNERSHIP_CHECK` | `true` for local sandbox |
 | `COMBAT_IS_LIVE` | Expose Aarena as live in `/realm/config/list` |
 
+### Combat (visual MVP)
+
+**Aarena only.** `AarenaRoom` accepts `combat.melee` / `combat.fire` and broadcasts `combat.enter` / `combat.positions` / `combat.leave`. Citaadel has no combat handlers. **Damage / hits are not authoritative yet.**
+
 ## Smoke checklist
 
 - [ ] `GET /health` → `ok: true`
@@ -82,4 +94,5 @@ curl -s https://api.yourdomain.com/health
 - [ ] Two browsers join `citaadel` and see each other move
 - [ ] `GET /foundry/config` returns wild nodes + wall receivers
 - [ ] Optional: join `aarena` after setting `COMBAT_IS_LIVE=true`
+- [ ] Attack on `/combat` or `/play`: melee slap/rush anim and/or missile projectile appear
 - [ ] Vercel FE `NEXT_PUBLIC_NETCODE=colyseus` reaches this host over **WSS**

@@ -6,6 +6,7 @@
   "main": "build/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:all": "bash scripts/dev-all.sh",
     "build": "tsc",
     "start": "node build/index.js",
     "typecheck": "tsc --noEmit"
