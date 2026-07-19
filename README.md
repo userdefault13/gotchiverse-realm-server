@@ -2,8 +2,9 @@
 
 Colyseus authoritative room server + thin HTTP BFF for the Gotchiverse 2D **walkable MVP**.
 
-- HTTP: auth nonce/token, realm config, `/realm/socket` shim, `/health`
-- Realtime: Colyseus room `citaadel` (move + see other players)
+- HTTP: auth nonce/token, realm config, `/realm/socket` shim, `/foundry/config`, `/health`
+- Realtime: Colyseus rooms `citaadel` + `aarena` (move + see other players)
+- Hybrid Grid Foundry PoC: wild veins, antennas, wall receivers, cargo/tithe
 - Chain identity: Base Envio/Goldsky subgraphs (optional ownership check)
 
 Deploy on **DigitalOcean** (aarcade host). The Next.js client is [`gotchiverse-2d`](https://github.com/userdefault13/gotchiverse-2d) on **Vercel**.
@@ -17,7 +18,7 @@ npm run dev
 ```
 
 - HTTP health: `http://localhost:2567/health`
-- Colyseus: `ws://localhost:2567` (room name `citaadel`)
+- Colyseus: `ws://localhost:2567` (rooms `citaadel`, `aarena`)
 
 Point the FE at:
 
@@ -32,7 +33,7 @@ NEXT_PUBLIC_NETCODE=colyseus
 1. `GET /user/nonce/get?address=0x...` → `{ nonce, message }`
 2. Wallet signs `nonce` (legacy FE) or `message`
 3. `GET /user/authtoken/get?address=0x...&signature=0x...&gotchiId=123` → `{ token }`
-4. Client `joinOrCreate('citaadel', { token, gotchiId })`
+4. Client `joinOrCreate('citaadel' | 'aarena', { token, gotchiId })`
 5. Room `onAuth` verifies JWT (and optional subgraph ownership)
 
 ## Docker / DigitalOcean
@@ -67,15 +68,18 @@ curl -s https://api.yourdomain.com/health
 |----------|---------|
 | `PORT` / `HOST` | Listen address |
 | `PUBLIC_URL` | URL returned by `/realm/socket` and config |
-| `CORS_ORIGINS` | Comma-separated FE origins (`*.vercel.app` suffix supported) |
+| `CORS_ORIGINS` | Comma-separated FE origins (`*.vercel.app` / `https://*.vercel.app` supported) |
 | `JWT_SECRET` | Auth token signing |
 | `CORE_SUBGRAPH_URL` | Base core GraphQL for ownership |
 | `GOTCHIVERSE_SUBGRAPH_URL` | Gotchiverse GraphQL |
 | `SKIP_OWNERSHIP_CHECK` | `true` for local sandbox |
+| `COMBAT_IS_LIVE` | Expose Aarena as live in `/realm/config/list` |
 
 ## Smoke checklist
 
 - [ ] `GET /health` → `ok: true`
 - [ ] Nonce → sign → authToken succeeds
 - [ ] Two browsers join `citaadel` and see each other move
+- [ ] `GET /foundry/config` returns wild nodes + wall receivers
+- [ ] Optional: join `aarena` after setting `COMBAT_IS_LIVE=true`
 - [ ] Vercel FE `NEXT_PUBLIC_NETCODE=colyseus` reaches this host over **WSS**

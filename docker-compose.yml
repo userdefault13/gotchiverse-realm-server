@@ -7,8 +7,8 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 2567
-    expose:
-      - "2567"
+    ports:
+      - "2567:2567"
     networks:
       - realm
 
@@ -18,6 +18,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      REALM_DOMAIN: ${REALM_DOMAIN:-realm.aarcadeghst.com}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
