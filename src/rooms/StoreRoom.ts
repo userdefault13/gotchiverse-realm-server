@@ -124,9 +124,9 @@ export class StoreRoom extends Room<StoreState> {
     player.gotchiId = auth?.gotchiId || String(options.gotchiId || '');
     player.name = String(options?.name || `Gotchi #${player.gotchiId}`);
     player.cartridgeId = String(options?.cartridgeId || '').trim();
-    // Spawn near center of 16×16 retail floor.
-    player.x = Math.round((STORE_INTERIOR_W / 2) * STORE_TILE_PX);
-    player.y = Math.round((STORE_INTERIOR_H / 2) * STORE_TILE_PX);
+    // Spawn just inside the front door (matches client SPAWN_TX/TY = 7, 14).
+    player.x = Math.round(7 * STORE_TILE_PX + STORE_TILE_PX / 2);
+    player.y = Math.round((STORE_INTERIOR_H - 2) * STORE_TILE_PX + STORE_TILE_PX / 2);
     this.state.players.set(client.sessionId, player);
   }
 
