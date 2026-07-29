@@ -5,10 +5,11 @@ import { WildNode } from '../schema/foundry/WildNode';
 import { Antenna } from '../schema/foundry/Antenna';
 import { WallReceiver } from '../schema/foundry/WallReceiver';
 import { FoundryCargo } from '../schema/foundry/FoundryCargo';
+import { FoundryEnemy } from '../schema/foundry/FoundryEnemy';
 import { verifyAuthToken } from '../auth/jwt';
 import { assertGotchiOwnedBy } from '../auth/ownership';
 import { MOVE, SPAWN } from '../config/env';
-import { FOUNDRY_CONFIG } from '../config/foundry';
+import { FOUNDRY_CONFIG, FOUNDRY_ANTENNA_KITS, FOUNDRY_SERVER_RECIPES, getFoundryVeinDefs } from '../config/foundry';
 import { canReachReceiver } from '../foundry/mesh';
 
 type JoinOptions = {
@@ -24,8 +25,19 @@ type AuthData = {
 };
 
 const TILE = 64;
-const GATHER_AMOUNT = 10;
 const RECEIVER_ID = FOUNDRY_CONFIG.wallReceiverSouth.id;
+
+function cargoGet(cargo: FoundryCargo, key: string): number {
+  return Number((cargo as unknown as Record<string, number>)[key] || 0);
+}
+
+function cargoSet(cargo: FoundryCargo, key: string, value: number) {
+  (cargo as unknown as Record<string, number>)[key] = value;
+}
+
+function cargoAdd(cargo: FoundryCargo, key: string, delta: number) {
+  cargoSet(cargo, key, cargoGet(cargo, key) + delta);
+}
 
 function parcelSizeByType(typeId: string): { width: number; height: number } {
   switch (typeId) {
@@ -81,6 +93,8 @@ export class CitaadelRoom extends Room<CitaadelState> {
   private joinedAt = new Map<string, number>();
   private lastTeleportAt = new Map<string, number>();
   private antennaSeq = 0;
+  private enemySeq = 0;
+  private enemyRespawnTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   onCreate() {
     this.setState(new CitaadelState());
@@ -150,27 +164,67 @@ export class CitaadelRoom extends Room<CitaadelState> {
   }
 
   private seedFoundryState() {
-    const yieldNode = new WildNode();
-    yieldNode.id = FOUNDRY_CONFIG.yieldFields.id;
-    yieldNode.x = FOUNDRY_CONFIG.yieldFields.x;
-    yieldNode.y = FOUNDRY_CONFIG.yieldFields.y;
-    yieldNode.veinType = FOUNDRY_CONFIG.yieldFields.veinType;
-    yieldNode.remaining = FOUNDRY_CONFIG.yieldFields.remaining;
-    this.state.wildNodes.set(yieldNode.id, yieldNode);
-
-    const desertNode = new WildNode();
-    desertNode.id = FOUNDRY_CONFIG.defiDesert.id;
-    desertNode.x = FOUNDRY_CONFIG.defiDesert.x;
-    desertNode.y = FOUNDRY_CONFIG.defiDesert.y;
-    desertNode.veinType = FOUNDRY_CONFIG.defiDesert.veinType;
-    desertNode.remaining = FOUNDRY_CONFIG.defiDesert.remaining;
-    this.state.wildNodes.set(desertNode.id, desertNode);
+    for (const def of getFoundryVeinDefs()) {
+      const node = new WildNode();
+      node.id = def.id;
+      node.x = def.x;
+      node.y = def.y;
+      node.veinType = def.veinType;
+      node.remaining = def.remaining;
+      this.state.wildNodes.set(node.id, node);
+    }
 
     const receiver = new WallReceiver();
     receiver.id = FOUNDRY_CONFIG.wallReceiverSouth.id;
     receiver.x = FOUNDRY_CONFIG.wallReceiverSouth.x;
     receiver.y = FOUNDRY_CONFIG.wallReceiverSouth.y;
     this.state.wallReceivers.set(receiver.id, receiver);
+
+    this.seedFoundryEnemies();
+  }
+
+  private seedFoundryEnemies() {
+    const mineralVeins = getFoundryVeinDefs().filter((v) => v.veinType !== 'yield');
+    for (const vein of mineralVeins) {
+      this.spawnEnemyNear(vein.x, vein.y, `${vein.id}-scout`);
+    }
+  }
+
+  private spawnEnemyNear(anchorX: number, anchorY: number, preferredId?: string) {
+    const id = preferredId || `enemy-${++this.enemySeq}`;
+    const enemy = new FoundryEnemy();
+    enemy.id = id;
+    enemy.x = Math.round(anchorX + (Math.random() * 4000 - 2000));
+    enemy.y = Math.round(anchorY + (Math.random() * 4000 - 2000));
+    enemy.maxHp = FOUNDRY_CONFIG.enemyHp;
+    enemy.hp = FOUNDRY_CONFIG.enemyHp;
+    enemy.kind = 'linkbreaker';
+    this.state.enemies.set(id, enemy);
+    return enemy;
+  }
+
+  private rollAlchemicaDrop(): { fud: number; fomo: number; alpha: number; kek: number } {
+    const drop = { fud: 0, fomo: 0, alpha: 0, kek: 0 };
+    if (Math.random() > FOUNDRY_CONFIG.enemyDropChance) return drop;
+
+    for (const token of ['fud', 'fomo', 'alpha', 'kek'] as const) {
+      const row = FOUNDRY_CONFIG.enemyDropTable[token];
+      if (Math.random() > row.chance) continue;
+      const span = Math.max(0, row.max - row.min);
+      drop[token] = row.min + Math.floor(Math.random() * (span + 1));
+    }
+    return drop;
+  }
+
+  private scheduleEnemyRespawn(enemyId: string, x: number, y: number) {
+    const prev = this.enemyRespawnTimers.get(enemyId);
+    if (prev) clearTimeout(prev);
+    const timer = setTimeout(() => {
+      this.enemyRespawnTimers.delete(enemyId);
+      if (this.state.enemies.has(enemyId)) return;
+      this.spawnEnemyNear(x, y, enemyId);
+    }, FOUNDRY_CONFIG.enemyRespawnMs);
+    this.enemyRespawnTimers.set(enemyId, timer);
   }
 
   private registerFoundryMessages() {
@@ -185,18 +239,63 @@ export class CitaadelRoom extends Room<CitaadelState> {
         return;
       }
 
-      node.remaining = Math.max(0, node.remaining - GATHER_AMOUNT);
+      const amount = FOUNDRY_CONFIG.gatherAmount;
+      node.remaining = Math.max(0, node.remaining - amount);
 
-      if (node.veinType === 'yield') {
-        cargo.fud += GATHER_AMOUNT;
-        cargo.fomo += GATHER_AMOUNT;
-        cargo.alpha += GATHER_AMOUNT;
-        cargo.kek += GATHER_AMOUNT;
-      } else if (node.veinType === 'desert_salvage') {
-        cargo.salvageAntenna += GATHER_AMOUNT;
-        cargo.salvageDish += GATHER_AMOUNT;
-        cargo.salvageSlag += GATHER_AMOUNT;
+      switch (node.veinType) {
+        case 'yield':
+          cargo.fud += amount;
+          cargo.fomo += amount;
+          cargo.alpha += amount;
+          cargo.kek += amount;
+          break;
+        case 'iron':
+          cargo.ironOre += amount;
+          break;
+        case 'copper':
+          cargo.copperOre += amount;
+          break;
+        case 'aluminum':
+          cargo.aluminumOre += amount;
+          break;
+        case 'cobalt':
+          cargo.cobaltOre += amount;
+          break;
+        case 'methane':
+          cargo.methane += amount;
+          break;
+        case 'noxious':
+          cargo.noxiousGas += amount;
+          break;
+        default:
+          break;
       }
+    });
+
+    this.onMessage('foundry.hitEnemy', (client, message: { enemyId?: string }) => {
+      const enemyId = String(message?.enemyId || '');
+      const enemy = this.state.enemies.get(enemyId);
+      const player = this.state.players.get(client.sessionId);
+      const cargo = this.getOrCreateCargo(client.sessionId);
+      if (!enemy || !player || enemy.hp <= 0) return;
+
+      if (distancePx(player.x, player.y, enemy.x, enemy.y) > FOUNDRY_CONFIG.enemyAttackRangePx) {
+        return;
+      }
+
+      enemy.hp = Math.max(0, enemy.hp - FOUNDRY_CONFIG.enemyHitDamage);
+      if (enemy.hp > 0) return;
+
+      const drop = this.rollAlchemicaDrop();
+      cargo.fud += drop.fud;
+      cargo.fomo += drop.fomo;
+      cargo.alpha += drop.alpha;
+      cargo.kek += drop.kek;
+
+      const ex = enemy.x;
+      const ey = enemy.y;
+      this.state.enemies.delete(enemyId);
+      this.scheduleEnemyRespawn(enemyId, ex, ey);
     });
 
     this.onMessage('foundry.deposit', (client) => {
@@ -214,6 +313,10 @@ export class CitaadelRoom extends Room<CitaadelState> {
 
       const owned = this.countAntennasForSession(client.sessionId);
       if (owned >= FOUNDRY_CONFIG.maxAntennasPerPlayer) return;
+
+      const cargo = this.getOrCreateCargo(client.sessionId);
+      if (cargo.antennaRelay < 1) return;
+      cargo.antennaRelay -= 1;
 
       const antenna = new Antenna();
       antenna.id = `antenna-${++this.antennaSeq}`;
@@ -233,10 +336,23 @@ export class CitaadelRoom extends Room<CitaadelState> {
     this.onMessage(
       'foundry.damageAntenna',
       (client, message: { antennaId?: string; amount?: number }) => {
-        const antennaId = String(message?.antennaId || '');
         const amount = Number(message?.amount ?? FOUNDRY_CONFIG.antennaDamagePerTick);
-        const antenna = this.state.antennas.get(antennaId);
-        if (!antenna || !Number.isFinite(amount) || amount <= 0) return;
+        if (!Number.isFinite(amount) || amount <= 0) return;
+
+        let antennaId = String(message?.antennaId || '');
+        let antenna = antennaId ? this.state.antennas.get(antennaId) : undefined;
+
+        if (!antenna) {
+          const receiver = this.state.wallReceivers.get(RECEIVER_ID);
+          if (!receiver) return;
+          const active = Array.from(this.state.antennas.values()).filter((a) => a.powered && a.hp > 0);
+          if (!active.length) return;
+          antenna = active.reduce((farthest, a) => {
+            const farthestDist = distancePx(farthest.x, farthest.y, receiver.x, receiver.y);
+            const antennaDist = distancePx(a.x, a.y, receiver.x, receiver.y);
+            return antennaDist > farthestDist ? a : farthest;
+          });
+        }
 
         antenna.hp = Math.max(0, antenna.hp - amount);
         if (antenna.hp <= 0) {
@@ -244,6 +360,38 @@ export class CitaadelRoom extends Room<CitaadelState> {
         }
       },
     );
+
+    this.onMessage('foundry.purchaseAntenna', (client, message: { kitId?: string }) => {
+      this.applyAntennaKit(client.sessionId, String(message?.kitId || 'antenna-kit'));
+    });
+
+    this.onMessage('foundry.purchaseSalvage', (client, message: { kitId?: string }) => {
+      this.applyAntennaKit(client.sessionId, String(message?.kitId || 'antenna-kit'));
+    });
+
+    this.onMessage('foundry.craftRecipe', (client, message: { recipeId?: string }) => {
+      const recipeId = String(message?.recipeId || '');
+      const recipe = FOUNDRY_SERVER_RECIPES.find((r) => r.id === recipeId);
+      if (!recipe) return;
+
+      const cargo = this.getOrCreateCargo(client.sessionId);
+      for (const [key, need] of Object.entries(recipe.inputs)) {
+        if (cargoGet(cargo, key) < need) return;
+      }
+      for (const [token, need] of Object.entries(recipe.power)) {
+        if (cargoGet(cargo, token) < need) return;
+      }
+
+      for (const [key, need] of Object.entries(recipe.inputs)) {
+        cargoAdd(cargo, key, -need);
+      }
+      for (const [token, need] of Object.entries(recipe.power)) {
+        cargoAdd(cargo, token, -need);
+      }
+      for (const [key, gain] of Object.entries(recipe.outputs)) {
+        cargoAdd(cargo, key, gain);
+      }
+    });
 
     this.onMessage('foundry.meshTransfer', (client) => {
       const cargo = this.getOrCreateCargo(client.sessionId);
@@ -269,6 +417,29 @@ export class CitaadelRoom extends Room<CitaadelState> {
 
       this.depositAlchemicaToTithe(cargo);
     });
+  }
+
+  private applyAntennaKit(sessionId: string, kitId: string) {
+    const kit = FOUNDRY_ANTENNA_KITS[kitId as keyof typeof FOUNDRY_ANTENNA_KITS];
+    if (!kit) return;
+
+    const cargo = this.getOrCreateCargo(sessionId);
+    for (const [key, need] of Object.entries(kit.materials)) {
+      if (cargoGet(cargo, key) < need) return;
+    }
+    for (const [token, need] of Object.entries(kit.power)) {
+      if (cargoGet(cargo, token) < need) return;
+    }
+
+    for (const [key, need] of Object.entries(kit.materials)) {
+      cargoAdd(cargo, key, -need);
+    }
+    for (const [token, need] of Object.entries(kit.power)) {
+      cargoAdd(cargo, token, -need);
+    }
+    for (const [key, gain] of Object.entries(kit.grant)) {
+      cargoAdd(cargo, key, gain);
+    }
   }
 
   private factionTick() {
@@ -371,5 +542,12 @@ export class CitaadelRoom extends Room<CitaadelState> {
     for (const id of toRemove) {
       this.state.antennas.delete(id);
     }
+  }
+
+  onDispose() {
+    for (const timer of this.enemyRespawnTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.enemyRespawnTimers.clear();
   }
 }

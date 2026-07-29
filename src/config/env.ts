@@ -27,6 +27,20 @@ export const env = {
   skipOwnershipCheck: String(process.env.SKIP_OWNERSHIP_CHECK || 'true').toLowerCase() === 'true',
   /** Flip via COMBAT_IS_LIVE=true after AarenaRoom join is verified in prod. */
   combatIsLive: String(process.env.COMBAT_IS_LIVE || 'false').toLowerCase() === 'true',
+  /** Aarcade cartridge-sim base (no trailing slash required). */
+  aarcadeCartridgeSimUrl: (
+    process.env.AARCADE_CARTRIDGE_SIM_URL || 'https://aarcadeghst.com/api/cartridge-sim'
+  ).replace(/\/$/, ''),
+  /** Shared secret for service pocket/credit from REALM KO prizes. */
+  aarcadePocketCreditSecret: process.env.AARCADE_POCKET_CREDIT_SECRET || '',
+  /** SIM NVDA units credited per KO (18-decimal integer string). Default 0.001 NVDA. */
+  rhKoPrizeAmount: process.env.RH_KO_PRIZE_AMOUNT || '1000000000000000',
+  /** Max KO pocket credits per wallet per UTC day. */
+  rhKoMaxCreditsPerDay: Number(process.env.RH_KO_MAX_CREDITS_PER_DAY || 20),
+  /** When true, hotkey token-drop credits SIM NVDA pocket (aarena-rh testing). */
+  rhTestDropEnabled: String(process.env.RH_TEST_DROP_ENABLED || 'false').toLowerCase() === 'true',
+  /** SIM NVDA units credited per test drop (18-decimal). Default 0.001 NVDA. */
+  rhTestDropAmount: process.env.RH_TEST_DROP_AMOUNT || process.env.RH_KO_PRIZE_AMOUNT || '1000000000000000',
 };
 
 export const SPAWN = {

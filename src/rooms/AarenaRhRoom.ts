@@ -2,20 +2,23 @@ import { Room, Client } from 'colyseus';
 import { AarenaState } from '../schema/AarenaState';
 import { Player } from '../schema/Player';
 import { verifyAuthToken } from '../auth/jwt';
-import { assertGotchiOwnedBy } from '../auth/ownership';
-import { MOVE } from '../config/env';
+import { MOVE, env } from '../config/env';
 import { CombatHandle, registerCombatMessages } from '../combat/registerCombat';
 import { isAarenaBlocked, randomAarenaSpawn, resolveAarenaMove } from '../maps/aarenaCollisions';
+import { creditCartridgePocket } from '../prize/creditPocket';
 
 type JoinOptions = {
   token?: string;
   gotchiId?: string;
   name?: string;
+  cartridgeId?: string;
+  chain?: string;
 };
 
 type AuthData = {
   address: string;
   gotchiId: string;
+  cartridgeId: string;
 };
 
 type MoveMessage = {
@@ -27,29 +30,34 @@ type MoveMessage = {
 
 /** Allow walk+dash desync — old cap yanked players back to plaza spawn. */
 const MAX_RUSH_SETTLE_PX = 24 * 64 * 2 + 256;
+const DEFAULT_MAX_HP = 3;
 
-export class AarenaRoom extends Room<AarenaState> {
+/**
+ * Robinhood Chain aarena — same map/combat as Base aarena, but:
+ * - skips Base subgraph ownership (Nakey / soft cartridge ids)
+ * - enables HP + KO SIM pocket prizes
+ */
+export class AarenaRhRoom extends Room<AarenaState> {
   maxClients = 200;
   private lastMoveAt = new Map<string, number>();
   private joinedAt = new Map<string, number>();
-  /** Remember last pos per gotchi so brief reconnects don't random-respawn in the plaza. */
   private lastGotchiPos = new Map<string, { x: number; y: number; at: number }>();
   private combat: CombatHandle | null = null;
 
   onCreate() {
     this.setState(new AarenaState());
-    this.setMetadata({ mapId: 'aarena' });
-    this.combat = registerCombatMessages(this);
+    this.setMetadata({ mapId: 'aarena', chain: 'rh' });
+    this.combat = registerCombatMessages(this, { enableDamage: true, roomKey: 'aarena-rh' });
 
     this.onMessage('move', (client, message: MoveMessage) => {
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
       if (typeof message?.x !== 'number' || typeof message?.y !== 'number') return;
       if (!Number.isFinite(message.x) || !Number.isFinite(message.y)) return;
+      if (player.hp <= 0) return;
 
       const now = Date.now();
 
-      // Post-dash reconcile: cancel in-flight rush and trust client end position.
       if (message.rushSettle) {
         this.combat?.cancelRush(client.sessionId);
         const dist = Math.hypot(message.x - player.x, message.y - player.y);
@@ -69,7 +77,6 @@ export class AarenaRoom extends Room<AarenaState> {
 
       if (this.combat?.isRushing(client.sessionId)) return;
 
-      // Allow one-shot snap shortly after join (FE/server spawn align / wall nudge).
       const joined = this.joinedAt.get(client.sessionId) || now;
       if (now - joined < 4000) {
         const snapped = resolveAarenaMove(player.x, player.y, message.x, message.y);
@@ -102,6 +109,56 @@ export class AarenaRoom extends Room<AarenaState> {
     this.onMessage('ping', (client) => {
       client.send('pong', { t: Date.now() });
     });
+
+    /** Test-only: hotkey alchemica drop → SIM NVDA pocket credit (RH_TEST_DROP_ENABLED). */
+    this.onMessage('prize.testDrop', (client, message: { token?: string }) => {
+      void this.handleTestDrop(client, message?.token);
+    });
+  }
+
+  private async handleTestDrop(client: Client, token?: string) {
+    if (!env.rhTestDropEnabled) {
+      client.send('combat.prize', {
+        ok: false,
+        error: 'test_drop_disabled',
+        message: 'Set RH_TEST_DROP_ENABLED=true on REALM to use hotkey drops.',
+      });
+      return;
+    }
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    if (!player.cartridgeId) {
+      client.send('combat.prize', {
+        ok: false,
+        error: 'no_cartridge',
+        message: 'Mint or bind an Aarcade cartridge to earn NVDA pocket prizes.',
+      });
+      return;
+    }
+    const refId = `testdrop:${this.roomId}:${client.sessionId}:${Date.now()}:${token || 'nvda'}`;
+    const amount = env.rhTestDropAmount;
+    const result = await creditCartridgePocket({
+      cartridgeId: player.cartridgeId,
+      amount,
+      refId,
+      reason: 'aarena-rh-test-drop',
+      token: 'nvda',
+    });
+    if (result.ok && !result.skipped) {
+      client.send('combat.prize', {
+        ok: true,
+        amount,
+        token: 'nvda',
+        cartridgeId: player.cartridgeId,
+        refId,
+      });
+    } else {
+      client.send('combat.prize', {
+        ok: false,
+        error: result.ok ? result.reason : result.error,
+        message: 'Test drop credit failed — check AARCADE_POCKET_CREDIT_SECRET + cartridge-sim.',
+      });
+    }
   }
 
   private rememberGotchiPos(gotchiId: string, x: number, y: number) {
@@ -114,12 +171,13 @@ export class AarenaRoom extends Room<AarenaState> {
       throw new Error('Missing auth token');
     }
     const claims = verifyAuthToken(options.token);
-    const gotchiId = String(options.gotchiId || claims.gotchiId || '');
+    const gotchiId = String(options.gotchiId || claims.gotchiId || claims.address || '');
     if (!gotchiId) {
       throw new Error('Missing gotchiId');
     }
-    await assertGotchiOwnedBy(claims.address, gotchiId);
-    return { address: claims.address, gotchiId };
+    // RH room: no Base subgraph ownership — Nakey / wallet-id / soft cartridge players OK.
+    const cartridgeId = String(options.cartridgeId || '').trim();
+    return { address: claims.address, gotchiId, cartridgeId };
   }
 
   onJoin(client: Client, options: JoinOptions, auth?: AuthData) {
@@ -137,6 +195,9 @@ export class AarenaRoom extends Room<AarenaState> {
     player.name = options.name || `Gotchi #${player.gotchiId}`;
     player.x = spawn.x;
     player.y = spawn.y;
+    player.maxHp = DEFAULT_MAX_HP;
+    player.hp = DEFAULT_MAX_HP;
+    player.cartridgeId = auth?.cartridgeId || String(options.cartridgeId || '').trim();
     this.state.players.set(client.sessionId, player);
     this.lastMoveAt.set(client.sessionId, Date.now());
     this.joinedAt.set(client.sessionId, Date.now());
