@@ -1,8 +1,20 @@
 import { Router, Request, Response } from 'express';
+import { matchMaker } from 'colyseus';
 import { verifyMessage } from 'ethers';
 import { env } from '../config/env';
 import { buildSignMessage, consumeNonce, issueNonce, peekNonce } from '../auth/nonce';
 import { signAuthToken } from '../auth/jwt';
+import { queryLeaderboard } from '../leaderboard/store';
+
+async function countRoomClients(roomName: string): Promise<number> {
+  try {
+    const rooms = await matchMaker.query({ name: roomName });
+    return rooms.reduce((sum, room) => sum + (Number((room as { clients?: number }).clients) || 0), 0);
+  } catch (e) {
+    console.warn(`[users/online] count ${roomName}`, e);
+    return 0;
+  }
+}
 
 export function createHttpRouter(): Router {
   const router = Router();
@@ -13,9 +25,75 @@ export function createHttpRouter(): Router {
       service: 'gotchiverse-realm-server',
       map: 'citaadel',
       publicUrl: env.publicUrl,
-      build: 'aarena-rh-ko-20260726',
+      build: 'users-online-20260823',
       time: new Date().toISOString(),
     });
+  });
+
+  /** Live Colyseus CCU for landing "players online" counters (Base + RH). */
+  router.get('/users/online', async (_req, res) => {
+    const [citaadelCount, aarenaCount, aarenaRhCount] = await Promise.all([
+      countRoomClients('citaadel'),
+      countRoomClients('aarena'),
+      countRoomClients('aarena-rh'),
+    ]);
+    res.json({
+      count: citaadelCount + aarenaCount + aarenaRhCount,
+      citaadelCount,
+      aarenaCount,
+      aarenaRhCount,
+    });
+  });
+
+  /**
+   * Soft stub — FE falls back to computeClientCombatTraits when empty.
+   * Keeps /user/combat-traits from 404-spamming the console in local/dev.
+   */
+  router.get('/user/combat-traits', (_req, res) => {
+    res.json({ data: { gotchis: {} } });
+  });
+
+  /**
+   * Aarena leaderboard (soft-launch).
+   * FE: in-game HUD + /leaderboard page → NEXT_PUBLIC_API_URL/leaderboard/all
+   * Query: limit, offset, sortBy, sortType, filterBy, gotchi
+   */
+  router.get('/leaderboard/all', (req: Request, res: Response) => {
+    try {
+      const limit = Number(req.query.limit);
+      const offset = Number(req.query.offset);
+      const sortBy = req.query.sortBy != null ? String(req.query.sortBy) : 'kills';
+      const sortType = req.query.sortType != null ? String(req.query.sortType) : 'desc';
+      const filterRaw = req.query.filterBy;
+      const filterBy =
+        filterRaw == null || filterRaw === 'undefined' || filterRaw === 'null'
+          ? ''
+          : String(filterRaw);
+      const gotchiId =
+        req.query.gotchi != null && String(req.query.gotchi) !== 'undefined'
+          ? String(req.query.gotchi)
+          : '';
+
+      const { leaderboard, player, total } = queryLeaderboard({
+        limit: Number.isFinite(limit) ? limit : 10,
+        offset: Number.isFinite(offset) ? offset : 0,
+        sortBy,
+        sortType,
+        filterBy,
+        gotchiId,
+      });
+
+      res.json({
+        leaderboard,
+        player,
+        gotchis: leaderboard,
+        total,
+        data: { leaderboard, player, total },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message, leaderboard: [], player: null });
+    }
   });
 
   /** Foundry PoC probe — disabled stub so FE doesn't 404 when PoC isn't on this host. */

@@ -7,9 +7,12 @@ export class Player extends Schema {
   @type('string') name: string = '';
   @type('number') x: number = 0;
   @type('number') y: number = 0;
-  /** Combat HP (aarena-rh). Base aarena leaves at max. */
-  @type('number') hp: number = 3;
-  @type('number') maxHp: number = 3;
+  /** Combat HP (trait-scaled; both aarena rooms). */
+  @type('number') hp: number = 1000;
+  @type('number') maxHp: number = 1000;
+  /** Attack stamina (AP). */
+  @type('number') ap: number = 100;
+  @type('number') maxAp: number = 100;
   /** Soft-launch Aarcade cartridge for SIM pocket prizes. */
   @type('string') cartridgeId: string = '';
 }

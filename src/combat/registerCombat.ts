@@ -3,6 +3,16 @@ import { Player } from '../schema/Player';
 import { isAarenaBlocked, resolveAarenaMove, randomAarenaSpawn } from '../maps/aarenaCollisions';
 import { env } from '../config/env';
 import { creditCartridgePocket } from '../prize/creditPocket';
+import {
+  AttackKind,
+  COMBAT_CONFIG,
+  CombatProfile,
+  apCostFor,
+  resolveCombatProfile,
+  rollDamage,
+  parseJoinTraits,
+} from './combatStats';
+import { leaderboardRecordHit, leaderboardRecordKo } from '../leaderboard/store';
 
 type CombatIntent = {
   hand?: string;
@@ -22,6 +32,7 @@ type ActiveMissile = {
   dirY: number;
   speed: number;
   expiresAt: number;
+  kind: AttackKind;
 };
 
 type ActiveMelee = {
@@ -30,6 +41,7 @@ type ActiveMelee = {
   expiresAt: number;
   /** Sessions already damaged by this melee instance. */
   hitSessions: Set<string>;
+  kind: AttackKind;
 };
 
 /** Authoritative dash while a charged melee rush is active. */
@@ -50,6 +62,8 @@ type CombatRoomState = {
 };
 
 export type CombatHandle = {
+  /** Apply trait combat profile after join (powers, regen, intervals). */
+  setProfile: (sessionId: string, profile: CombatProfile) => void;
   /** Drop combat entities owned by a leaving client. */
   onPlayerLeave: (sessionId: string) => void;
   /** True while this session is mid-rush (rooms should ignore walk moves). */
@@ -60,10 +74,12 @@ export type CombatHandle = {
 };
 
 export type CombatRegisterOpts = {
-  /** Enable HP damage + KO prizes (aarena-rh). */
+  /** Enable HP damage + KO (both aarena rooms). */
   enableDamage?: boolean;
   /** Room id fragment for prize refIds. */
   roomKey?: string;
+  /** Credit NVDA pocket on KO (RH only). */
+  awardPrizes?: boolean;
 };
 
 /** Same ballpark as AarenaRoom rushSettle — walk+dash desync from plaza spawn. */
@@ -77,14 +93,13 @@ const RUSH_SPEED = 720;
 const SLAP_SIZE = 64;
 const MISSILE_SIZE = 24;
 const PLAYER_HIT_RADIUS = 40;
-const ATTACK_COOLDOWN_MS = 180;
+const DEFAULT_ATTACK_COOLDOWN_MS = 180;
 const SLAP_TTL_MS = 450;
 const MISSILE_TTL_MS = 2200;
 const TICK_MS = 50;
 /** Matches FE charge tail: maxRushDistance * GOTCHI_SIZE.UNIT */
 const MAX_RUSH_DISTANCE_PX = 24 * 64;
 const MAX_RUSH_CHARGE_S = 2;
-const DEFAULT_MAX_HP = 3;
 const RESPAWN_MS = 2500;
 
 function normalizeDir(x: number, y: number): { x: number; y: number } | null {
@@ -107,19 +122,24 @@ function utcDayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function baselineProfile(): CombatProfile {
+  return resolveCombatProfile(parseJoinTraits(null));
+}
+
 /**
- * Visual combat MVP: validate fire/melee intents and broadcast legacy-shaped
- * enter/positions/leave payloads so the FE can reuse Melee/Missiles Phaser code.
- * Rush also moves the owning Player along the attack direction.
- * When enableDamage: hit detection, HP, KO respawn + SIM pocket credit.
+ * Validate fire/melee intents and broadcast legacy-shaped enter/positions/leave
+ * payloads. When enableDamage: trait damage, AP spend/regen, KO (+ optional prizes).
  */
 export function registerCombatMessages(
   room: Room<CombatRoomState>,
   opts: CombatRegisterOpts = {},
 ): CombatHandle {
   const enableDamage = Boolean(opts.enableDamage);
+  const awardPrizes = Boolean(opts.awardPrizes);
   const roomKey = opts.roomKey || room.roomId || 'aarena';
-  const lastAttackAt = new Map<string, number>();
+  const lastMeleeAt = new Map<string, number>();
+  const lastFireAt = new Map<string, number>();
+  const profiles = new Map<string, CombatProfile>();
   const missiles = new Map<string, ActiveMissile>();
   const melees = new Map<string, ActiveMelee>();
   const rushes = new Map<string, ActiveRush>();
@@ -136,14 +156,48 @@ export function registerCombatMessages(
     return kind === 'melee' ? `${gotchiId}_${seq}` : `${gotchiId}#${seq}`;
   };
 
-  const canAttack = (sessionId: string): boolean => {
+  const profileOf = (sessionId: string): CombatProfile =>
+    profiles.get(sessionId) || baselineProfile();
+
+  const cooldownOk = (sessionId: string, kind: 'melee' | 'fire'): boolean => {
     const now = Date.now();
-    const prev = lastAttackAt.get(sessionId) || 0;
-    if (now - prev < ATTACK_COOLDOWN_MS) return false;
+    const profile = profileOf(sessionId);
+    const minMs =
+      kind === 'melee'
+        ? profile.minMeleeInterval || DEFAULT_ATTACK_COOLDOWN_MS
+        : profile.minFireInterval || DEFAULT_ATTACK_COOLDOWN_MS;
+    const map = kind === 'melee' ? lastMeleeAt : lastFireAt;
+    const prev = map.get(sessionId) || 0;
+    if (now - prev < minMs) return false;
     if (rushes.has(sessionId)) return false;
     const player = room.state.players.get(sessionId);
     if (player && player.hp <= 0) return false;
-    lastAttackAt.set(sessionId, now);
+    return true;
+  };
+
+  const markAttack = (sessionId: string, kind: 'melee' | 'fire') => {
+    const now = Date.now();
+    if (kind === 'melee') lastMeleeAt.set(sessionId, now);
+    else lastFireAt.set(sessionId, now);
+  };
+
+  /** Soft AP gate — returns false without freezing input; notifies client. */
+  const trySpendAp = (client: Client, kind: AttackKind): boolean => {
+    const player = room.state.players.get(client.sessionId);
+    if (!player) return false;
+    const profile = profileOf(client.sessionId);
+    const cost = apCostFor(kind, profile);
+    if (player.ap < cost) {
+      client.send('combat.ap_denied', {
+        kind,
+        ap: player.ap,
+        maxAp: player.maxAp,
+        cost,
+        message: 'Not enough stamina',
+      });
+      return false;
+    }
+    player.ap = Math.max(0, player.ap - cost);
     return true;
   };
 
@@ -159,6 +213,7 @@ export function registerCombatMessages(
   };
 
   const canAwardPrize = (attacker: Player, victim: Player): boolean => {
+    if (!awardPrizes) return false;
     const a = (attacker.address || '').toLowerCase();
     const v = (victim.address || '').toLowerCase();
     if (!a || !v || a === v) return false;
@@ -180,7 +235,11 @@ export function registerCombatMessages(
     dailyCredits.set(dayKey, (dailyCredits.get(dayKey) || 0) + 1);
   };
 
-  const applyHit = (attackerSessionId: string, victimSessionId: string) => {
+  const applyHit = (
+    attackerSessionId: string,
+    victimSessionId: string,
+    kind: AttackKind,
+  ) => {
     if (!enableDamage) return;
     if (attackerSessionId === victimSessionId) return;
     const now = Date.now();
@@ -189,9 +248,30 @@ export function registerCombatMessages(
     const attacker = room.state.players.get(attackerSessionId);
     const victim = room.state.players.get(victimSessionId);
     if (!attacker || !victim) return;
+    // Never self-damage: same session, same gotchi, or same wallet (ghost reconnects).
+    if (String(attacker.gotchiId || '') && String(attacker.gotchiId) === String(victim.gotchiId)) return;
+    const atkAddr = (attacker.address || '').toLowerCase();
+    const vicAddr = (victim.address || '').toLowerCase();
+    if (atkAddr && vicAddr && atkAddr === vicAddr) return;
     if (victim.hp <= 0 || attacker.hp <= 0) return;
 
-    victim.hp = Math.max(0, victim.hp - 1);
+    const atkProfile = profileOf(attackerSessionId);
+    const vicProfile = profileOf(victimSessionId);
+    const { damage, evaded } = rollDamage(kind, atkProfile, vicProfile);
+
+    if (!evaded) {
+      victim.hp = Math.max(0, victim.hp - damage);
+      leaderboardRecordHit({
+        attackerGotchiId: attacker.gotchiId,
+        victimGotchiId: victim.gotchiId,
+        damage,
+        attackerName: attacker.name,
+        victimName: victim.name,
+        attackerAddress: attacker.address,
+        victimAddress: victim.address,
+      });
+    }
+
     room.broadcast('combat.hit', {
       attackerSessionId,
       victimSessionId,
@@ -199,9 +279,21 @@ export function registerCombatMessages(
       victimGotchiId: victim.gotchiId,
       hp: victim.hp,
       maxHp: victim.maxHp,
+      damage: evaded ? 0 : damage,
+      evaded,
+      kind,
     });
 
-    if (victim.hp > 0) return;
+    if (evaded || victim.hp > 0) return;
+
+    leaderboardRecordKo({
+      attackerGotchiId: attacker.gotchiId,
+      victimGotchiId: victim.gotchiId,
+      attackerName: attacker.name,
+      victimName: victim.name,
+      attackerAddress: attacker.address,
+      victimAddress: victim.address,
+    });
 
     koSeq += 1;
     const refId = `ko:${roomKey}:${koSeq}:${attacker.gotchiId}:${victim.gotchiId}`;
@@ -209,24 +301,26 @@ export function registerCombatMessages(
 
     let prizeAmount: string | null = null;
     let prizeSkipped: string | null = null;
-    if (canAwardPrize(attacker, victim) && attacker.cartridgeId) {
-      prizeAmount = env.rhKoPrizeAmount;
-      markPrizeAwarded(attacker, victim);
-      void creditCartridgePocket({
-        cartridgeId: attacker.cartridgeId,
-        amount: prizeAmount,
-        refId,
-        reason: 'aarena-rh-ko',
-      }).then((result) => {
-        if (!result.ok) {
-          const client = room.clients.find((c: Client) => c.sessionId === attackerSessionId);
-          client?.send('combat.prize', { ok: false, error: result.error, refId });
-        }
-      });
-    } else if (!attacker.cartridgeId) {
-      prizeSkipped = 'no_cartridge';
-    } else {
-      prizeSkipped = 'capped_or_cooldown';
+    if (awardPrizes) {
+      if (canAwardPrize(attacker, victim) && attacker.cartridgeId) {
+        prizeAmount = env.rhKoPrizeAmount;
+        markPrizeAwarded(attacker, victim);
+        void creditCartridgePocket({
+          cartridgeId: attacker.cartridgeId,
+          amount: prizeAmount,
+          refId,
+          reason: 'aarena-rh-ko',
+        }).then((result) => {
+          if (!result.ok) {
+            const client = room.clients.find((c: Client) => c.sessionId === attackerSessionId);
+            client?.send('combat.prize', { ok: false, error: result.error, refId });
+          }
+        });
+      } else if (!attacker.cartridgeId) {
+        prizeSkipped = 'no_cartridge';
+      } else {
+        prizeSkipped = 'capped_or_cooldown';
+      }
     }
 
     room.broadcast('combat.ko', {
@@ -241,31 +335,37 @@ export function registerCombatMessages(
       respawnMs: RESPAWN_MS,
     });
 
-    if (attacker.cartridgeId && prizeAmount) {
-      const atkClient = room.clients.find((c: Client) => c.sessionId === attackerSessionId);
-      atkClient?.send('combat.prize', {
-        ok: true,
-        amount: prizeAmount,
-        token: 'nvda',
-        cartridgeId: attacker.cartridgeId,
-        refId,
-      });
-    } else if (prizeSkipped === 'no_cartridge') {
-      const atkClient = room.clients.find((c: Client) => c.sessionId === attackerSessionId);
-      atkClient?.send('combat.prize', {
-        ok: false,
-        error: 'no_cartridge',
-        message: 'Mint or bind an Aarcade cartridge to earn NVDA pocket prizes.',
-      });
+    if (awardPrizes) {
+      if (attacker.cartridgeId && prizeAmount) {
+        const atkClient = room.clients.find((c: Client) => c.sessionId === attackerSessionId);
+        atkClient?.send('combat.prize', {
+          ok: true,
+          amount: prizeAmount,
+          token: 'nvda',
+          cartridgeId: attacker.cartridgeId,
+          refId,
+        });
+      } else if (prizeSkipped === 'no_cartridge') {
+        const atkClient = room.clients.find((c: Client) => c.sessionId === attackerSessionId);
+        atkClient?.send('combat.prize', {
+          ok: false,
+          error: 'no_cartridge',
+          message: 'Mint or bind an Aarcade cartridge to earn NVDA pocket prizes.',
+        });
+      }
     }
 
     setTimeout(() => {
       const p = room.state.players.get(victimSessionId);
       if (!p) return;
       const spawn = randomAarenaSpawn();
+      const profile = profileOf(victimSessionId);
       p.x = spawn.x;
       p.y = spawn.y;
-      p.hp = p.maxHp || DEFAULT_MAX_HP;
+      p.maxHp = profile.maxHp;
+      p.maxAp = profile.maxAp;
+      p.hp = profile.maxHp;
+      p.ap = profile.maxAp;
       room.broadcast('combat.respawn', {
         sessionId: victimSessionId,
         gotchiId: p.gotchiId,
@@ -273,6 +373,8 @@ export function registerCombatMessages(
         y: p.y,
         hp: p.hp,
         maxHp: p.maxHp,
+        ap: p.ap,
+        maxAp: p.maxAp,
       });
     }, RESPAWN_MS);
   };
@@ -290,7 +392,7 @@ export function registerCombatMessages(
         const dist = Math.hypot(other.x - owner.x, other.y - owner.y);
         if (dist <= radius) {
           melee.hitSessions.add(sessionId);
-          applyHit(melee.ownerSessionId, sessionId);
+          applyHit(melee.ownerSessionId, sessionId, melee.kind);
         }
       });
     });
@@ -309,7 +411,7 @@ export function registerCombatMessages(
         const dist = Math.hypot(other.x - m.x, other.y - m.y);
         if (dist <= radius) {
           hit = true;
-          applyHit(m.ownerSessionId, sessionId);
+          applyHit(m.ownerSessionId, sessionId, m.kind);
           leaveMissiles.push({ id, destroyed: true });
           missiles.delete(id);
         }
@@ -321,10 +423,16 @@ export function registerCombatMessages(
     try {
       const player = room.state.players.get(client.sessionId);
       if (!player) return;
-      if (!canAttack(client.sessionId)) return;
+      if (!cooldownOk(client.sessionId, 'melee')) return;
 
       const dir = normalizeDir(Number(message?.direction?.x), Number(message?.direction?.y));
       if (!dir) return;
+
+      const chargeDuration = Number(message?.chargeDuration) || 0;
+      const isRush = chargeDuration > 0;
+      const kind: AttackKind = isRush ? 'rush' : 'slap';
+      if (!trySpendAp(client, kind)) return;
+      markAttack(client.sessionId, 'melee');
 
       // Align server with client sprite before rush — walk clamp often leaves server at plaza.
       const originX = Number(message?.x);
@@ -337,8 +445,6 @@ export function registerCombatMessages(
         }
       }
 
-      const chargeDuration = Number(message?.chargeDuration) || 0;
-      const isRush = chargeDuration > 0;
       const id = nextId(player.gotchiId, 'melee');
       const distance = isRush ? rushDistancePx(chargeDuration) : 0;
       const rushTtl = isRush ? Math.max(200, Math.round((distance / RUSH_SPEED) * 1000)) : SLAP_TTL_MS;
@@ -364,6 +470,7 @@ export function registerCombatMessages(
         ownerSessionId: client.sessionId,
         expiresAt: Date.now() + rushTtl,
         hitSessions: new Set(),
+        kind,
       });
 
       if (isRush && distance > 0) {
@@ -385,13 +492,17 @@ export function registerCombatMessages(
     try {
       const player = room.state.players.get(client.sessionId);
       if (!player) return;
-      if (!canAttack(client.sessionId)) return;
+      if (!cooldownOk(client.sessionId, 'fire')) return;
 
       const dir = normalizeDir(Number(message?.direction?.x), Number(message?.direction?.y));
       if (!dir) return;
 
       const chargeDuration = Number(message?.chargeDuration) || 0;
       const isCharged = chargeDuration > 0;
+      const kind: AttackKind = isCharged ? 'snipe' : 'ranged';
+      if (!trySpendAp(client, kind)) return;
+      markAttack(client.sessionId, 'fire');
+
       const id = nextId(player.gotchiId, 'missile');
       const muzzle = 30;
       const x = player.x + dir.x * muzzle;
@@ -420,6 +531,7 @@ export function registerCombatMessages(
         dirY: dir.y,
         speed,
         expiresAt: Date.now() + MISSILE_TTL_MS,
+        kind,
       });
     } catch (e) {
       console.warn('[combat.fire]', e);
@@ -473,6 +585,20 @@ export function registerCombatMessages(
     tryMeleeHits();
     tryMissileHits(leaveMissiles);
 
+    // HP / AP regen while alive
+    if (enableDamage && COMBAT_CONFIG.enableHealthRegen) {
+      room.state.players.forEach((player: Player, sessionId: string) => {
+        if (player.hp <= 0) return;
+        const profile = profileOf(sessionId);
+        if (profile.healthRegen > 0 && player.hp < player.maxHp) {
+          player.hp = Math.min(player.maxHp, player.hp + profile.healthRegen * dt);
+        }
+        if (profile.apRegen > 0 && player.ap < player.maxAp) {
+          player.ap = Math.min(player.maxAp, player.ap + profile.apRegen * dt);
+        }
+      });
+    }
+
     if (moved.length) {
       room.broadcast('combat.positions', { missile: moved });
     }
@@ -480,6 +606,9 @@ export function registerCombatMessages(
   }, TICK_MS);
 
   return {
+    setProfile(sessionId: string, profile: CombatProfile) {
+      profiles.set(sessionId, profile);
+    },
     onPlayerLeave(sessionId: string) {
       const leaveMissiles: { id: string; destroyed: boolean }[] = [];
       const leaveMelees: { id: string; destroyed: boolean }[] = [];
@@ -496,7 +625,9 @@ export function registerCombatMessages(
         }
       });
       rushes.delete(sessionId);
-      lastAttackAt.delete(sessionId);
+      lastMeleeAt.delete(sessionId);
+      lastFireAt.delete(sessionId);
+      profiles.delete(sessionId);
       invulnerableUntil.delete(sessionId);
       broadcastLeave(leaveMissiles, leaveMelees);
     },
@@ -511,7 +642,9 @@ export function registerCombatMessages(
       missiles.clear();
       melees.clear();
       rushes.clear();
-      lastAttackAt.clear();
+      lastMeleeAt.clear();
+      lastFireAt.clear();
+      profiles.clear();
       invulnerableUntil.clear();
     },
   };

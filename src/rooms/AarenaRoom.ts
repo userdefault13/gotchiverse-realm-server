@@ -5,12 +5,16 @@ import { verifyAuthToken } from '../auth/jwt';
 import { assertGotchiOwnedBy } from '../auth/ownership';
 import { MOVE } from '../config/env';
 import { CombatHandle, registerCombatMessages } from '../combat/registerCombat';
+import { parseJoinTraits, resolveCombatProfile } from '../combat/combatStats';
 import { isAarenaBlocked, randomAarenaSpawn, resolveAarenaMove } from '../maps/aarenaCollisions';
+import { leaderboardOnJoin, leaderboardOnLeave } from '../leaderboard/store';
 
 type JoinOptions = {
   token?: string;
   gotchiId?: string;
   name?: string;
+  /** JSON array or number[] of withSetsNumericTraits [NRG,AGG,SPK,BRN,...] */
+  traits?: unknown;
 };
 
 type AuthData = {
@@ -39,13 +43,18 @@ export class AarenaRoom extends Room<AarenaState> {
   onCreate() {
     this.setState(new AarenaState());
     this.setMetadata({ mapId: 'aarena' });
-    this.combat = registerCombatMessages(this);
+    this.combat = registerCombatMessages(this, {
+      enableDamage: true,
+      roomKey: 'aarena',
+      awardPrizes: false,
+    });
 
     this.onMessage('move', (client, message: MoveMessage) => {
       const player = this.state.players.get(client.sessionId);
       if (!player) return;
       if (typeof message?.x !== 'number' || typeof message?.y !== 'number') return;
       if (!Number.isFinite(message.x) || !Number.isFinite(message.y)) return;
+      if (player.hp <= 0) return;
 
       const now = Date.now();
 
@@ -124,6 +133,18 @@ export class AarenaRoom extends Room<AarenaState> {
 
   onJoin(client: Client, options: JoinOptions, auth?: AuthData) {
     const gotchiId = auth?.gotchiId || String(options.gotchiId || '');
+    // Drop ghost sessions of the same gotchi so slap can't "self-hit" a duplicate body.
+    for (const other of this.clients) {
+      if (other.sessionId === client.sessionId) continue;
+      const existing = this.state.players.get(other.sessionId);
+      if (existing && String(existing.gotchiId) === String(gotchiId)) {
+        try {
+          other.leave(4000);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
     const prev = this.lastGotchiPos.get(String(gotchiId));
     const reuse =
       prev && Date.now() - prev.at < 120_000 && !isAarenaBlocked(prev.x, prev.y)
@@ -137,15 +158,30 @@ export class AarenaRoom extends Room<AarenaState> {
     player.name = options.name || `Gotchi #${player.gotchiId}`;
     player.x = spawn.x;
     player.y = spawn.y;
+    const traits = parseJoinTraits(options.traits);
+    const profile = resolveCombatProfile(traits);
+    player.maxHp = profile.maxHp;
+    player.hp = profile.maxHp;
+    player.maxAp = profile.maxAp;
+    player.ap = profile.maxAp;
     this.state.players.set(client.sessionId, player);
+    this.combat?.setProfile(client.sessionId, profile);
     this.lastMoveAt.set(client.sessionId, Date.now());
     this.joinedAt.set(client.sessionId, Date.now());
     this.rememberGotchiPos(gotchiId, player.x, player.y);
+    leaderboardOnJoin({
+      gotchiId,
+      name: player.name,
+      address: player.address,
+    });
   }
 
   onLeave(client: Client) {
     const player = this.state.players.get(client.sessionId);
-    if (player) this.rememberGotchiPos(player.gotchiId, player.x, player.y);
+    if (player) {
+      this.rememberGotchiPos(player.gotchiId, player.x, player.y);
+      leaderboardOnLeave(player.gotchiId);
+    }
     this.combat?.onPlayerLeave(client.sessionId);
     this.state.players.delete(client.sessionId);
     this.lastMoveAt.delete(client.sessionId);

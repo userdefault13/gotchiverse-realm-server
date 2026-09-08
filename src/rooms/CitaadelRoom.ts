@@ -8,7 +8,7 @@ import { FoundryCargo } from '../schema/foundry/FoundryCargo';
 import { FoundryEnemy } from '../schema/foundry/FoundryEnemy';
 import { verifyAuthToken } from '../auth/jwt';
 import { assertGotchiOwnedBy } from '../auth/ownership';
-import { MOVE, SPAWN } from '../config/env';
+import { MOVE, SPAWN, CITAADEL_BOUNDS, MAP_PAD_TILES } from '../config/env';
 import { FOUNDRY_CONFIG, FOUNDRY_ANTENNA_KITS, FOUNDRY_SERVER_RECIPES, getFoundryVeinDefs } from '../config/foundry';
 import { canReachReceiver } from '../foundry/mesh';
 
@@ -57,10 +57,18 @@ function parcelSizeByType(typeId: string): { width: number; height: number } {
   }
 }
 
+function clampCitaadel(x: number, y: number): { x: number; y: number } {
+  const half = 24; // ~gotchi half-width so sprite stays on-canvas at edges
+  return {
+    x: Math.round(Math.min(CITAADEL_BOUNDS.maxX - half, Math.max(CITAADEL_BOUNDS.minX + half, x))),
+    y: Math.round(Math.min(CITAADEL_BOUNDS.maxY - half, Math.max(CITAADEL_BOUNDS.minY + half, y))),
+  };
+}
+
 function randomSpawn(): { x: number; y: number } {
   const x = SPAWN.minX + Math.random() * (SPAWN.maxX - SPAWN.minX);
   const y = SPAWN.minY + Math.random() * (SPAWN.maxY - SPAWN.minY);
-  return { x: Math.round(x), y: Math.round(y) };
+  return clampCitaadel(x, y);
 }
 
 /** Spawn at parcel center when join options include a Citaadel parcel id (`C-x-y-T`). */
@@ -68,8 +76,9 @@ function spawnFromOptions(spawnLocId?: string): { x: number; y: number } {
   if (spawnLocId && spawnLocId.charAt(0) === 'C') {
     const parts = spawnLocId.split('-');
     if (parts.length >= 4) {
-      const tileX = Number(parts[1]);
-      const tileY = Number(parts[2]);
+      // Parcel ids are unpadded tiles; map chunks are +660-padded.
+      const tileX = Number(parts[1]) + MAP_PAD_TILES;
+      const tileY = Number(parts[2]) + MAP_PAD_TILES;
       const typeId = parts[3];
       if (Number.isFinite(tileX) && Number.isFinite(tileY)) {
         const { width, height } = parcelSizeByType(typeId);
@@ -112,8 +121,9 @@ export class CitaadelRoom extends Room<CitaadelState> {
       // Allow one-shot snap to selected parcel shortly after join (FE/server spawn align).
       const joined = this.joinedAt.get(client.sessionId) || now;
       if (now - joined < 4000) {
-        player.x = Math.round(message.x);
-        player.y = Math.round(message.y);
+        const snap = clampCitaadel(message.x, message.y);
+        player.x = snap.x;
+        player.y = snap.y;
         this.lastMoveAt.set(client.sessionId, now);
         return;
       }
@@ -131,8 +141,9 @@ export class CitaadelRoom extends Room<CitaadelState> {
         dy = (dy / dist) * maxDist;
       }
 
-      player.x = Math.round(player.x + dx);
-      player.y = Math.round(player.y + dy);
+      const next = clampCitaadel(player.x + dx, player.y + dy);
+      player.x = next.x;
+      player.y = next.y;
     });
 
     // Bounce-gate / event travel — intentional long-distance snap (not walk-clamped).
@@ -147,12 +158,11 @@ export class CitaadelRoom extends Room<CitaadelState> {
       if (now - last < 1500) return;
       this.lastTeleportAt.set(client.sessionId, now);
 
-      // Citaadel parcels sit within a large but finite tile map.
-      const MAX = 9000 * TILE;
-      if (message.x < -TILE || message.y < -TILE || message.x > MAX || message.y > MAX) return;
+      const snap = clampCitaadel(message.x, message.y);
+      if (snap.x < -TILE || snap.y < -TILE) return;
 
-      player.x = Math.round(message.x);
-      player.y = Math.round(message.y);
+      player.x = snap.x;
+      player.y = snap.y;
       this.lastMoveAt.set(client.sessionId, now);
     });
 

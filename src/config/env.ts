@@ -20,10 +20,10 @@ export const env = {
   publicUrl: (process.env.PUBLIC_URL || 'http://localhost:2567').replace(/\/$/, ''),
   coreSubgraphUrl:
     process.env.CORE_SUBGRAPH_URL ||
-    'https://api.goldsky.com/api/public/project_cmh3flagm0001r4p25foufjtt/subgraphs/aavegotchi-core-base/prod/gn',
+    'https://aarcadeghst.com/api/subgraph/aavegotchi-core-base',
   gotchiverseSubgraphUrl:
     process.env.GOTCHIVERSE_SUBGRAPH_URL ||
-    'https://api.goldsky.com/api/public/project_cmh3flagm0001r4p25foufjtt/subgraphs/gotchiverse-base/prod/gn',
+    'https://aarcadeghst.com/api/subgraph/gotchiverse-base',
   skipOwnershipCheck: String(process.env.SKIP_OWNERSHIP_CHECK || 'true').toLowerCase() === 'true',
   /** Flip via COMBAT_IS_LIVE=true after AarenaRoom join is verified in prod. */
   combatIsLive: String(process.env.COMBAT_IS_LIVE || 'false').toLowerCase() === 'true',
@@ -37,18 +37,32 @@ export const env = {
   rhKoPrizeAmount: process.env.RH_KO_PRIZE_AMOUNT || '1000000000000000',
   /** Max KO pocket credits per wallet per UTC day. */
   rhKoMaxCreditsPerDay: Number(process.env.RH_KO_MAX_CREDITS_PER_DAY || 20),
+  /** Min ms between KO credits for the same attacker→victim pair. */
+  rhKoPairCooldownMs: Number(process.env.RH_KO_PAIR_COOLDOWN_MS || 60_000),
   /** When true, hotkey token-drop credits SIM NVDA pocket (aarena-rh testing). */
   rhTestDropEnabled: String(process.env.RH_TEST_DROP_ENABLED || 'false').toLowerCase() === 'true',
   /** SIM NVDA units credited per test drop (18-decimal). Default 0.001 NVDA. */
   rhTestDropAmount: process.env.RH_TEST_DROP_AMOUNT || process.env.RH_KO_PRIZE_AMOUNT || '1000000000000000',
 };
 
+/** +10 chunk / 660 tile pad around the original citaadel (matches FE CITAADEL_MAP_PAD_TILES). */
+export const MAP_PAD_TILES = 660;
+
 export const SPAWN = {
-  // Approximate citaadel spawn band (pixels), from shared_code map constants
-  minX: 42 * 64,
-  maxX: 42 * 64 + 20 * 64,
-  minY: 52 * 64,
-  maxY: 52 * 64 + 20 * 64,
+  // Freebie spawn in District 49 (C96): local x=1055, y=1055 → padded tiles.
+  // C96 origin padded (9108, 5940) + local (1055, 1055) = (10163, 6995).
+  minX: 10160 * 64,
+  maxX: 10165 * 64,
+  minY: 6992 * 64,
+  maxY: 6997 * 64,
+};
+
+/** Full citaadel tilemap (164×116 chunks × 66 tiles × 64px) — D44–D49 + pads. */
+export const CITAADEL_BOUNDS = {
+  minX: 0,
+  minY: 0,
+  maxX: 164 * 66 * 64,
+  maxY: 116 * 66 * 64,
 };
 
 /** Aarena map size + SPAWN_BOUNDS from shared_code/constants/const.game.ts */
