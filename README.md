@@ -96,3 +96,14 @@ curl -s https://api.yourdomain.com/health
 - [ ] Optional: join `aarena` after setting `COMBAT_IS_LIVE=true`
 - [ ] Attack on `/combat` or `/play`: melee slap/rush anim and/or missile projectile appear
 - [ ] Vercel FE `NEXT_PUBLIC_NETCODE=colyseus` reaches this host over **WSS**
+
+## Author
+
+**Julius Wong** (userDef@ult) — [userdefault.dev](https://www.userdefault.dev) · [GitHub](https://github.com/userdefault13) · [X](https://x.com/userDefault_0x)
+
+Freelance engineer working on AI agent orchestration, AI developer tooling, and Unity/WebGL
+multiplayer games. Write-up of the multiplayer game work behind this project:
+[userdefault.dev/work/gotchiverse-2d](https://www.userdefault.dev/work/gotchiverse-2d).
+
+Available for freelance and contract work — [book a consult](https://www.userdefault.dev/hire),
+or read more about [Unity & WebGL game development](https://www.userdefault.dev/services/unity-game-development).
