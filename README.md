@@ -97,6 +97,8 @@ curl -s https://api.yourdomain.com/health
 | `AARCADE_ACARTRIDGE_URL` | Aarcade aCartridge API (agent login lookup + attested checkpoints) |
 | `ACARTRIDGE_ATTESTOR_SECRET` | Attestor key for agent session checkpoints; empty = agents play unattested |
 | `ACARTRIDGE_GAME_ID` | Cartridge gameId agents enter (`gotchiverse-base`) |
+| `ACARTRIDGE_DIAMOND` / `ACARTRIDGE_CHAIN_ID` | Chain mode: sign EIP-712 checkpoints for this aCartridge diamond (Base Sepolia `84532`) |
+| `ACARTRIDGE_ATTESTOR_PRIVATE_KEY` (or `EVM_PRIVATE_KEY`) | Attestor signer registered on the diamond via `setAttestor`; the agent submits the signed checkpoint on-chain |
 
 ### Combat (visual MVP)
 

@@ -18,6 +18,12 @@ export type AgentSession = {
   start: LeaderboardRow | null;
 };
 
+/** `acart-12` → 12 (on-chain tokenId); null for anything else. */
+export function tokenIdFromAgentId(agentId: string): number | null {
+  const m = String(agentId || '').match(/^acart-(\d+)$/i);
+  return m ? Number(m[1]) : null;
+}
+
 export type SessionDelta = {
   kills: number;
   deaths: number;
@@ -76,6 +82,8 @@ export function agentSessionEnd(sessionId: string): void {
   const stateHash = `0x${createHash('sha256').update(JSON.stringify(summary)).digest('hex')}`;
   void attestCheckpoint({
     agentId: s.agentId,
+    tokenId: tokenIdFromAgentId(s.agentId) ?? undefined,
+    cartridgeId: s.cartridgeId || undefined,
     nonce: now,
     stateHash,
     score,

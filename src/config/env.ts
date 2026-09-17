@@ -41,6 +41,15 @@ export const env = {
   acartridgeAttestorSecret: process.env.ACARTRIDGE_ATTESTOR_SECRET || '',
   /** Cartridge gameId agents enter for this realm (Base network). */
   acartridgeGameId: process.env.ACARTRIDGE_GAME_ID || 'gotchiverse-base',
+  /**
+   * Chain mode: sign EIP-712 Checkpoints for the aCartridge diamond instead of the soft-sim
+   * header-only attestation. Needs the attestor wallet key (registered via setAttestor) and
+   * the diamond address; `abra keygen foundry` stores the key as EVM_PRIVATE_KEY.
+   */
+  acartridgeAttestorPrivateKey:
+    process.env.ACARTRIDGE_ATTESTOR_PRIVATE_KEY || process.env.EVM_PRIVATE_KEY || '',
+  acartridgeDiamond: process.env.ACARTRIDGE_DIAMOND || '',
+  acartridgeChainId: Number(process.env.ACARTRIDGE_CHAIN_ID || 84532),
   /** SIM NVDA units credited per KO (18-decimal integer string). Default 0.001 NVDA. */
   rhKoPrizeAmount: process.env.RH_KO_PRIZE_AMOUNT || '1000000000000000',
   /** Max KO pocket credits per wallet per UTC day. */
