@@ -11,6 +11,7 @@ import { assertGotchiOwnedBy } from '../auth/ownership';
 import { MOVE, SPAWN, CITAADEL_BOUNDS, MAP_PAD_TILES } from '../config/env';
 import { FOUNDRY_CONFIG, FOUNDRY_ANTENNA_KITS, FOUNDRY_SERVER_RECIPES, getFoundryVeinDefs } from '../config/foundry';
 import { canReachReceiver } from '../foundry/mesh';
+import { agentSessionEnd, agentSessionStart } from '../agent/session';
 
 type JoinOptions = {
   token?: string;
@@ -22,6 +23,8 @@ type JoinOptions = {
 type AuthData = {
   address: string;
   gotchiId: string;
+  agentId?: string;
+  cartridgeId?: string;
 };
 
 const TILE = 64;
@@ -513,12 +516,15 @@ export class CitaadelRoom extends Room<CitaadelState> {
       throw new Error('Missing auth token');
     }
     const claims = verifyAuthToken(options.token);
-    const gotchiId = String(options.gotchiId || claims.gotchiId || '');
+    // Agent claims carry the cartridge hero as gotchiId; the token itself is proof.
+    const gotchiId = claims.agentId
+      ? String(claims.gotchiId || '')
+      : String(options.gotchiId || claims.gotchiId || '');
     if (!gotchiId) {
       throw new Error('Missing gotchiId');
     }
-    await assertGotchiOwnedBy(claims.address, gotchiId);
-    return { address: claims.address, gotchiId };
+    if (!claims.agentId) await assertGotchiOwnedBy(claims.address, gotchiId);
+    return { address: claims.address, gotchiId, agentId: claims.agentId, cartridgeId: claims.cartridgeId };
   }
 
   onJoin(client: Client, options: JoinOptions, auth?: AuthData) {
@@ -530,13 +536,23 @@ export class CitaadelRoom extends Room<CitaadelState> {
     player.name = options.name || `Gotchi #${player.gotchiId}`;
     player.x = spawn.x;
     player.y = spawn.y;
+    player.cartridgeId = auth?.cartridgeId || '';
     this.state.players.set(client.sessionId, player);
     this.lastMoveAt.set(client.sessionId, Date.now());
     this.joinedAt.set(client.sessionId, Date.now());
     this.getOrCreateCargo(client.sessionId);
+    if (auth?.agentId) {
+      agentSessionStart(client.sessionId, {
+        agentId: auth.agentId,
+        cartridgeId: auth.cartridgeId || '',
+        gotchiId: player.gotchiId,
+        zone: 'citaadel',
+      });
+    }
   }
 
   onLeave(client: Client) {
+    agentSessionEnd(client.sessionId);
     this.state.players.delete(client.sessionId);
     this.state.cargos.delete(client.sessionId);
     this.lastMoveAt.delete(client.sessionId);

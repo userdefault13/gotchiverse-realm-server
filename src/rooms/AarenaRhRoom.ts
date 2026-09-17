@@ -8,6 +8,7 @@ import { parseJoinTraits, resolveCombatProfile } from '../combat/combatStats';
 import { isAarenaBlocked, randomAarenaSpawn, resolveAarenaMove } from '../maps/aarenaCollisions';
 import { creditCartridgePocket } from '../prize/creditPocket';
 import { leaderboardOnJoin, leaderboardOnLeave } from '../leaderboard/store';
+import { agentSessionEnd, agentSessionStart } from '../agent/session';
 
 type JoinOptions = {
   token?: string;
@@ -23,6 +24,7 @@ type AuthData = {
   address: string;
   gotchiId: string;
   cartridgeId: string;
+  agentId?: string;
 };
 
 type MoveMessage = {
@@ -178,6 +180,17 @@ export class AarenaRhRoom extends Room<AarenaState> {
       throw new Error('Missing auth token');
     }
     const claims = verifyAuthToken(options.token);
+    // Agent claims pin hero + cartridge from the token (no client-supplied override).
+    if (claims.agentId) {
+      const heroId = String(claims.gotchiId || '');
+      if (!heroId) throw new Error('Missing gotchiId');
+      return {
+        address: claims.address,
+        gotchiId: heroId,
+        cartridgeId: String(claims.cartridgeId || ''),
+        agentId: claims.agentId,
+      };
+    }
     const gotchiId = String(options.gotchiId || claims.gotchiId || claims.address || '');
     if (!gotchiId) {
       throw new Error('Missing gotchiId');
@@ -231,6 +244,14 @@ export class AarenaRhRoom extends Room<AarenaState> {
       name: player.name,
       address: player.address,
     });
+    if (auth?.agentId) {
+      agentSessionStart(client.sessionId, {
+        agentId: auth.agentId,
+        cartridgeId: player.cartridgeId,
+        gotchiId,
+        zone: 'aarena-rh',
+      });
+    }
   }
 
   onLeave(client: Client) {
@@ -239,6 +260,7 @@ export class AarenaRhRoom extends Room<AarenaState> {
       this.rememberGotchiPos(player.gotchiId, player.x, player.y);
       leaderboardOnLeave(player.gotchiId);
     }
+    agentSessionEnd(client.sessionId);
     this.combat?.onPlayerLeave(client.sessionId);
     this.state.players.delete(client.sessionId);
     this.lastMoveAt.delete(client.sessionId);

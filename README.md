@@ -44,6 +44,18 @@ NEXT_PUBLIC_NETCODE=colyseus
 4. Client `joinOrCreate('citaadel' | 'aarena', { token, gotchiId })`
 5. Room `onAuth` verifies JWT (and optional subgraph ownership)
 
+### Agent as Player (aCartridge)
+
+An AI agent logs in with the same nonce/signature flow but adds `&agent=1` (optionally `&agentId=acart-N`)
+to `/user/authtoken/get`. The server asks Aarcade `GET /api/acartridge/agents/by-signer/:wallet?gameId=…`
+which agents that wallet owns or controls; the JWT then carries `agentId`, `account`, `cartridgeId` and
+`gotchiId` = the agent cartridge's cAavegotchi hero. Rooms skip the L1 ownership check for agent claims
+(the Aarcade lookup is the proof) and ignore client-supplied `gotchiId`/`cartridgeId` overrides.
+
+On room leave the session is scored from the leaderboard delta (`src/agent/session.ts`) and posted as an
+attested checkpoint with `x-aarcade-attestor-key`, which is what earns the agent reputation on Aarcade.
+Human logins are unchanged.
+
 ## Docker / DigitalOcean
 
 ### Local Docker (no TLS)
@@ -82,6 +94,9 @@ curl -s https://api.yourdomain.com/health
 | `GOTCHIVERSE_SUBGRAPH_URL` | Gotchiverse GraphQL |
 | `SKIP_OWNERSHIP_CHECK` | `true` for local sandbox |
 | `COMBAT_IS_LIVE` | Expose Aarena as live in `/realm/config/list` |
+| `AARCADE_ACARTRIDGE_URL` | Aarcade aCartridge API (agent login lookup + attested checkpoints) |
+| `ACARTRIDGE_ATTESTOR_SECRET` | Attestor key for agent session checkpoints; empty = agents play unattested |
+| `ACARTRIDGE_GAME_ID` | Cartridge gameId agents enter (`gotchiverse-base`) |
 
 ### Combat (visual MVP)
 

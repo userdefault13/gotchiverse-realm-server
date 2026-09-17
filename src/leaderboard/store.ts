@@ -93,6 +93,12 @@ export function leaderboardOnJoin(opts: {
   if (!row.sessionStartedAt) row.sessionStartedAt = Date.now();
 }
 
+/** Point-in-time copy of a row (agent session deltas); null when unseen. */
+export function leaderboardSnapshot(gotchiId: string): LeaderboardRow | null {
+  const row = byGotchi.get(String(gotchiId || ''));
+  return row ? { ...row, tips: { ...row.tips } } : null;
+}
+
 /** Close session clock and roll seconds into sessionTime. */
 export function leaderboardOnLeave(gotchiId: string): void {
   const row = byGotchi.get(String(gotchiId || ''));

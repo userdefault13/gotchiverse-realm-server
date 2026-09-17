@@ -33,6 +33,14 @@ export const env = {
   ).replace(/\/$/, ''),
   /** Shared secret for service pocket/credit from REALM KO prizes. */
   aarcadePocketCreditSecret: process.env.AARCADE_POCKET_CREDIT_SECRET || '',
+  /** Aarcade aCartridge (Agent as Player) API base — agent auth + attested checkpoints. */
+  aarcadeAcartridgeUrl: (
+    process.env.AARCADE_ACARTRIDGE_URL || 'https://aarcadeghst.com/api/acartridge'
+  ).replace(/\/$/, ''),
+  /** Attestor key sent as x-aarcade-attestor-key; empty disables attestation (agents still play). */
+  acartridgeAttestorSecret: process.env.ACARTRIDGE_ATTESTOR_SECRET || '',
+  /** Cartridge gameId agents enter for this realm (Base network). */
+  acartridgeGameId: process.env.ACARTRIDGE_GAME_ID || 'gotchiverse-base',
   /** SIM NVDA units credited per KO (18-decimal integer string). Default 0.001 NVDA. */
   rhKoPrizeAmount: process.env.RH_KO_PRIZE_AMOUNT || '1000000000000000',
   /** Max KO pocket credits per wallet per UTC day. */

@@ -8,6 +8,7 @@ import { CombatHandle, registerCombatMessages } from '../combat/registerCombat';
 import { parseJoinTraits, resolveCombatProfile } from '../combat/combatStats';
 import { isAarenaBlocked, randomAarenaSpawn, resolveAarenaMove } from '../maps/aarenaCollisions';
 import { leaderboardOnJoin, leaderboardOnLeave } from '../leaderboard/store';
+import { agentSessionEnd, agentSessionStart } from '../agent/session';
 
 type JoinOptions = {
   token?: string;
@@ -20,6 +21,8 @@ type JoinOptions = {
 type AuthData = {
   address: string;
   gotchiId: string;
+  agentId?: string;
+  cartridgeId?: string;
 };
 
 type MoveMessage = {
@@ -123,12 +126,15 @@ export class AarenaRoom extends Room<AarenaState> {
       throw new Error('Missing auth token');
     }
     const claims = verifyAuthToken(options.token);
-    const gotchiId = String(options.gotchiId || claims.gotchiId || '');
+    // Agent claims carry the cartridge hero as gotchiId; the token itself is proof.
+    const gotchiId = claims.agentId
+      ? String(claims.gotchiId || '')
+      : String(options.gotchiId || claims.gotchiId || '');
     if (!gotchiId) {
       throw new Error('Missing gotchiId');
     }
-    await assertGotchiOwnedBy(claims.address, gotchiId);
-    return { address: claims.address, gotchiId };
+    if (!claims.agentId) await assertGotchiOwnedBy(claims.address, gotchiId);
+    return { address: claims.address, gotchiId, agentId: claims.agentId, cartridgeId: claims.cartridgeId };
   }
 
   onJoin(client: Client, options: JoinOptions, auth?: AuthData) {
@@ -164,6 +170,7 @@ export class AarenaRoom extends Room<AarenaState> {
     player.hp = profile.maxHp;
     player.maxAp = profile.maxAp;
     player.ap = profile.maxAp;
+    player.cartridgeId = auth?.cartridgeId || '';
     this.state.players.set(client.sessionId, player);
     this.combat?.setProfile(client.sessionId, profile);
     this.lastMoveAt.set(client.sessionId, Date.now());
@@ -174,6 +181,14 @@ export class AarenaRoom extends Room<AarenaState> {
       name: player.name,
       address: player.address,
     });
+    if (auth?.agentId) {
+      agentSessionStart(client.sessionId, {
+        agentId: auth.agentId,
+        cartridgeId: auth.cartridgeId || '',
+        gotchiId,
+        zone: 'aarena',
+      });
+    }
   }
 
   onLeave(client: Client) {
@@ -182,6 +197,7 @@ export class AarenaRoom extends Room<AarenaState> {
       this.rememberGotchiPos(player.gotchiId, player.x, player.y);
       leaderboardOnLeave(player.gotchiId);
     }
+    agentSessionEnd(client.sessionId);
     this.combat?.onPlayerLeave(client.sessionId);
     this.state.players.delete(client.sessionId);
     this.lastMoveAt.delete(client.sessionId);

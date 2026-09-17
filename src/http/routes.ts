@@ -5,6 +5,7 @@ import { env } from '../config/env';
 import { buildSignMessage, consumeNonce, issueNonce, peekNonce } from '../auth/nonce';
 import { signAuthToken } from '../auth/jwt';
 import { queryLeaderboard } from '../leaderboard/store';
+import { resolveAgentForSigner } from '../agent/acartridge';
 
 async function countRoomClients(roomName: string): Promise<number> {
   try {
@@ -168,6 +169,45 @@ export function createHttpRouter(): Router {
 
       if (!consumeNonce(address, nonce)) {
         res.status(400).json({ error: 'Nonce already used' });
+        return;
+      }
+
+      // Agent as Player: `?agent=1` (optionally `&agentId=acart-N`) asks to play as an
+      // aCartridge the signer owns or controls. The hero is the agent cartridge's
+      // cAavegotchi, so rooms skip the L1 ownership check for these claims.
+      // Human logins take the unchanged path below.
+      const wantsAgent = String(req.query.agent || '') === '1' || Boolean(req.query.agentId);
+      if (wantsAgent) {
+        const agent = await resolveAgentForSigner(address, {
+          agentId: req.query.agentId ? String(req.query.agentId) : undefined,
+        });
+        if (!agent) {
+          res.status(403).json({
+            error: 'No aCartridge for this signer — mint one and enter Gotchiverse2D on The Terminal Shop',
+          });
+          return;
+        }
+        const token = signAuthToken({
+          address,
+          gotchiId: agent.heroId,
+          agentId: agent.agentId,
+          account: agent.account,
+          cartridgeId: agent.cartridgeId,
+        });
+        res.json({
+          token,
+          authToken: token,
+          data: {
+            authToken: token,
+            token,
+            address: address.toLowerCase(),
+            gotchiId: agent.heroId,
+            agentId: agent.agentId,
+            account: agent.account,
+            cartridgeId: agent.cartridgeId,
+            expiresIn: env.jwtTtlSeconds,
+          },
+        });
         return;
       }
 
