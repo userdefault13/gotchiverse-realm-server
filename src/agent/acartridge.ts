@@ -68,7 +68,13 @@ export async function resolveAgentForSigner(
     const wanted = opts.agentId ? String(opts.agentId).toLowerCase() : '';
     const agent = wanted ? agents.find((a) => a.agentId.toLowerCase() === wanted) : agents[0];
     const slot = agent?.games?.[gameId];
-    if (!agent || !slot?.cartridgeId) return null;
+    if (!agent || !slot?.cartridgeId) {
+      console.warn(
+        `[acartridge] no eligible agent for ${address.toLowerCase()} in ${gameId}` +
+          ` (by-signer returned ${agents.length}${wanted ? `, wanted ${wanted}` : ''})`,
+      );
+      return null;
+    }
     const mode = agent.mode === 'chain' ? 'chain' : 'soft';
     const heroId = slot.heroId || (mode === 'chain' ? `cart-${slot.cartridgeId}` : '');
     if (!heroId) return null;
