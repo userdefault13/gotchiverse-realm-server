@@ -48,9 +48,10 @@ export function sessionDelta(start: LeaderboardRow | null, end: LeaderboardRow |
 }
 
 /**
- * Session score: KOs dominate, then damage and hits, plus one point per minute
- * played so a peaceful Citaadel visit still counts. Kept simple on purpose —
- * the diamond stores bestScore per game, not this formula.
+ * Session score: KOs dominate, then damage and hits, plus one point per started
+ * minute played so any real visit (even a short peaceful one) counts for at
+ * least 1. Kept simple on purpose — the diamond stores bestScore per game, not
+ * this formula.
  */
 export function scoreSession(delta: SessionDelta): number {
   return (
@@ -58,7 +59,7 @@ export function scoreSession(delta: SessionDelta): number {
     Math.floor(delta.damageDealt / 10) +
     delta.hits +
     delta.alchemicaPickedUp +
-    Math.floor(delta.seconds / 60)
+    (delta.seconds > 0 ? Math.ceil(delta.seconds / 60) : 0)
   );
 }
 
