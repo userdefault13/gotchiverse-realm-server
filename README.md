@@ -113,3 +113,19 @@ curl -s https://api.yourdomain.com/health
 - [ ] Optional: join `aarena` after setting `COMBAT_IS_LIVE=true`
 - [ ] Attack on `/combat` or `/play`: melee slap/rush anim and/or missile projectile appear
 - [ ] Vercel FE `NEXT_PUBLIC_NETCODE=colyseus` reaches this host over **WSS**
+
+## App Platform (production: realm.aarcadeghst.com)
+
+The live REALM is a DigitalOcean App Platform app (`gotchiverse-realm`). `.do/app.yaml` is the
+reference spec for this repo; `scripts/deploy-do-app.sh` repoints the live app at this repo and
+applies the Agent-as-Player env vars while preserving existing secrets:
+
+```bash
+abra run gotchiverse-2d -k DIGITALOCEAN_ACCESS_TOKEN -- \
+abra run AarcadeGh-t -k ACARTRIDGE_ATTESTOR_SECRET,AARCADE_POCKET_CREDIT_SECRET -- \
+abra run Gotchiverse-Server -k EVM_PRIVATE_KEY -- \
+bash -c 'ACARTRIDGE_ATTESTOR_PRIVATE_KEY=$EVM_PRIVATE_KEY scripts/deploy-do-app.sh'
+```
+
+`DRY_RUN=1` prints the change without sending it. The DO GitHub integration must have access to
+this repository. Pushes to `main` then auto-deploy (`deploy_on_push`).
