@@ -13,6 +13,7 @@ import {
   parseJoinTraits,
 } from './combatStats';
 import { leaderboardRecordHit, leaderboardRecordKo } from '../leaderboard/store';
+import type { RoundClock } from '../tourney/roundClock';
 
 type CombatIntent = {
   hand?: string;
@@ -80,6 +81,8 @@ export type CombatRegisterOpts = {
   roomKey?: string;
   /** Credit NVDA pocket on KO (RH only). */
   awardPrizes?: boolean;
+  /** RH tournament round clock — tallies hits / KOs and owns KO refIds when present. */
+  tourney?: RoundClock | null;
 };
 
 /** Same ballpark as AarenaRoom rushSettle — walk+dash desync from plaza spawn. */
@@ -136,7 +139,13 @@ export function registerCombatMessages(
 ): CombatHandle {
   const enableDamage = Boolean(opts.enableDamage);
   const awardPrizes = Boolean(opts.awardPrizes);
+  const tourney = opts.tourney || null;
   const roomKey = opts.roomKey || room.roomId || 'aarena';
+  const actorOf = (p: Player) => ({
+    address: (p.address || '').toLowerCase(),
+    gotchiId: String(p.gotchiId || ''),
+    cartridgeId: String(p.cartridgeId || ''),
+  });
   const lastMeleeAt = new Map<string, number>();
   const lastFireAt = new Map<string, number>();
   const profiles = new Map<string, CombatProfile>();
@@ -261,6 +270,7 @@ export function registerCombatMessages(
 
     if (!evaded) {
       victim.hp = Math.max(0, victim.hp - damage);
+      tourney?.recordHit(actorOf(attacker), damage);
       leaderboardRecordHit({
         attackerGotchiId: attacker.gotchiId,
         victimGotchiId: victim.gotchiId,
@@ -296,7 +306,11 @@ export function registerCombatMessages(
     });
 
     koSeq += 1;
-    const refId = `ko:${roomKey}:${koSeq}:${attacker.gotchiId}:${victim.gotchiId}`;
+    // Tournament rounds own the KO refId (ko:<roomId>:<roundStart>:<seq>:<atk>:<vic>) so Aarcade
+    // can tie it to the round; the legacy drip keeps its process-local refId otherwise.
+    const refId = tourney
+      ? tourney.recordKo(actorOf(attacker), actorOf(victim), damage).refId
+      : `ko:${roomKey}:${koSeq}:${attacker.gotchiId}:${victim.gotchiId}`;
     invulnerableUntil.set(victimSessionId, now + RESPAWN_MS + 500);
 
     let prizeAmount: string | null = null;

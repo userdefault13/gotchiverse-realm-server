@@ -8,13 +8,15 @@
 # Optional secrets (set when present in env, left untouched otherwise):
 #   ACARTRIDGE_ATTESTOR_SECRET       (vault: AarcadeGh-t)
 #   ACARTRIDGE_ATTESTOR_PRIVATE_KEY  (vault: Gotchiverse-Server → EVM_PRIVATE_KEY)
+#   RH_TOURNEY_EVENT_SECRET          (vault: AarcadeGh-t) — RH tournament event auth
+#   RH_TOURNEY_ENABLED / RH_ROUND_MINUTES / RH_TOURNEY_VERIFY_CARTRIDGE / RH_KO_DRIP_ENABLED (plain)
 #   AARCADE_POCKET_CREDIT_SECRET     (vault: AarcadeGh-t, if KO prizes should credit pockets)
 # Optional: DO_APP_NAME (gotchiverse-realm), REALM_REPO (userdefault13/gotchiverse-realm-server),
 #           REALM_BRANCH (main), ACARTRIDGE_DIAMOND / ACARTRIDGE_CHAIN_ID overrides, DRY_RUN=1
 #
 # Run with abra so no secret touches the shell history (three Touch IDs, keys scoped with -k):
 #   abra run gotchiverse-2d -k DIGITALOCEAN_ACCESS_TOKEN -- \
-#   abra run AarcadeGh-t -k ACARTRIDGE_ATTESTOR_SECRET,AARCADE_POCKET_CREDIT_SECRET -- \
+#   abra run AarcadeGh-t -k ACARTRIDGE_ATTESTOR_SECRET,AARCADE_POCKET_CREDIT_SECRET,RH_TOURNEY_EVENT_SECRET -- \
 #   abra run Gotchiverse-Server -k EVM_PRIVATE_KEY -- \
 #   bash -c 'ACARTRIDGE_ATTESTOR_PRIVATE_KEY=$EVM_PRIVATE_KEY scripts/deploy-do-app.sh'
 set -euo pipefail
@@ -62,9 +64,18 @@ plain = {
     "ACARTRIDGE_DIAMOND": os.environ["ACARTRIDGE_DIAMOND"],
     "ACARTRIDGE_CHAIN_ID": os.environ["ACARTRIDGE_CHAIN_ID"],
     "AARCADE_CARTRIDGE_SIM_URL": "https://aarcadeghst.com/api/cartridge-sim",
+    # RH weekly stock tournament (AarcadeGh-t docs/RH_TOURNEY.md). Flip RH_TOURNEY_ENABLED=true
+    # here and on Vercel together; the KO drip turns off automatically unless RH_KO_DRIP_ENABLED is set.
+    "RH_TOURNEY_ENABLED": os.environ.get("RH_TOURNEY_ENABLED", "false"),
+    "RH_TOURNEY_EVENTS_URL": os.environ.get("RH_TOURNEY_EVENTS_URL", "https://aarcadeghst.com/api/rh-tourney/events"),
+    "RH_ROUND_MINUTES": os.environ.get("RH_ROUND_MINUTES", "10"),
+    "RH_TOURNEY_VERIFY_CARTRIDGE": os.environ.get("RH_TOURNEY_VERIFY_CARTRIDGE", "false"),
 }
+if os.environ.get("RH_KO_DRIP_ENABLED"):
+    plain["RH_KO_DRIP_ENABLED"] = os.environ["RH_KO_DRIP_ENABLED"]
 secrets = {k: os.environ[k] for k in
-           ("ACARTRIDGE_ATTESTOR_SECRET", "ACARTRIDGE_ATTESTOR_PRIVATE_KEY", "AARCADE_POCKET_CREDIT_SECRET")
+           ("ACARTRIDGE_ATTESTOR_SECRET", "ACARTRIDGE_ATTESTOR_PRIVATE_KEY", "AARCADE_POCKET_CREDIT_SECRET",
+            "RH_TOURNEY_EVENT_SECRET")
            if os.environ.get(k)}
 
 envs = svc.setdefault("envs", [])

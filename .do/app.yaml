@@ -71,6 +71,18 @@ services:
       - key: ACARTRIDGE_ATTESTOR_SECRET
         type: SECRET
         value: "replace-via-deploy-script"
+      # RH weekly stock tournament — off until the owner flips it (see AarcadeGh-t docs/RH_TOURNEY.md)
+      - key: RH_TOURNEY_ENABLED
+        value: "false"
+      - key: RH_TOURNEY_EVENTS_URL
+        value: https://aarcadeghst.com/api/rh-tourney/events
+      - key: RH_TOURNEY_EVENT_SECRET
+        type: SECRET
+        value: "replace-via-deploy-script"
+      - key: RH_ROUND_MINUTES
+        value: "10"
+      - key: RH_TOURNEY_VERIFY_CARTRIDGE
+        value: "false"
       - key: ACARTRIDGE_ATTESTOR_PRIVATE_KEY
         type: SECRET
         value: "replace-via-deploy-script"

@@ -60,6 +60,26 @@ export const env = {
   rhTestDropEnabled: String(process.env.RH_TEST_DROP_ENABLED || 'false').toLowerCase() === 'true',
   /** SIM NVDA units credited per test drop (18-decimal). Default 0.001 NVDA. */
   rhTestDropAmount: process.env.RH_TEST_DROP_AMOUNT || process.env.RH_KO_PRIZE_AMOUNT || '1000000000000000',
+
+  /**
+   * RH weekly stock tournament (AarcadeGh-t docs/RH_TOURNEY.md). When enabled, aarena-rh runs
+   * timed rounds and reports KOs / round results to Aarcade, which owns scoring + prizes.
+   */
+  rhTourneyEnabled: String(process.env.RH_TOURNEY_ENABLED || 'false').toLowerCase() === 'true',
+  rhTourneyEventsUrl: process.env.RH_TOURNEY_EVENTS_URL || 'https://aarcadeghst.com/api/rh-tourney/events',
+  rhTourneyEventSecret: process.env.RH_TOURNEY_EVENT_SECRET || '',
+  /** Round length in minutes (wall-clock aligned). */
+  rhRoundMinutes: Math.max(1, Number(process.env.RH_ROUND_MINUTES || 10)),
+  /** Verify a joining human's cartridge/hero against cartridge-sim (fail-open on upstream errors). */
+  rhTourneyVerifyCartridge: String(process.env.RH_TOURNEY_VERIFY_CARTRIDGE || 'false').toLowerCase() === 'true',
+  /**
+   * Legacy 0.001-NVDA-per-KO pocket drip. Explicit RH_KO_DRIP_ENABLED wins; otherwise the drip
+   * stays on until the tournament is enabled (owner decision: tournament replaces the drip).
+   */
+  rhKoDripEnabled:
+    process.env.RH_KO_DRIP_ENABLED != null
+      ? String(process.env.RH_KO_DRIP_ENABLED).toLowerCase() === 'true'
+      : String(process.env.RH_TOURNEY_ENABLED || 'false').toLowerCase() !== 'true',
 };
 
 /** +10 chunk / 660 tile pad around the original citaadel (matches FE CITAADEL_MAP_PAD_TILES). */

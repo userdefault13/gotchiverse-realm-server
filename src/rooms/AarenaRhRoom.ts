@@ -9,6 +9,9 @@ import { isAarenaBlocked, randomAarenaSpawn, resolveAarenaMove } from '../maps/a
 import { creditCartridgePocket } from '../prize/creditPocket';
 import { leaderboardOnJoin, leaderboardOnLeave } from '../leaderboard/store';
 import { agentSessionEnd, agentSessionStart } from '../agent/session';
+import { RoundClock } from '../tourney/roundClock';
+import { reportTourneyEvent } from '../tourney/reportEvents';
+import { verifyRhCartridge } from '../tourney/verifyCartridge';
 
 type JoinOptions = {
   token?: string;
@@ -25,6 +28,8 @@ type AuthData = {
   gotchiId: string;
   cartridgeId: string;
   agentId?: string;
+  /** Hero collateral pinned at join when RH_TOURNEY_VERIFY_CARTRIDGE resolved it. */
+  collateral?: string | null;
 };
 
 type MoveMessage = {
@@ -48,14 +53,30 @@ export class AarenaRhRoom extends Room<AarenaState> {
   private joinedAt = new Map<string, number>();
   private lastGotchiPos = new Map<string, { x: number; y: number; at: number }>();
   private combat: CombatHandle | null = null;
+  private tourney: RoundClock | null = null;
 
   onCreate() {
     this.setState(new AarenaState());
-    this.setMetadata({ mapId: 'aarena', chain: 'rh' });
+    this.setMetadata({ mapId: 'aarena', chain: 'rh', tourney: env.rhTourneyEnabled });
+    if (env.rhTourneyEnabled) {
+      this.tourney = new RoundClock({
+        roomId: this.roomId,
+        roundMs: env.rhRoundMinutes * 60_000,
+        onRoundEnd: (payload) => reportTourneyEvent(payload),
+        onKo: (payload) => reportTourneyEvent(payload),
+        broadcast: (type, payload) => this.broadcast(type, payload),
+      });
+    }
     this.combat = registerCombatMessages(this, {
       enableDamage: true,
       roomKey: 'aarena-rh',
-      awardPrizes: true,
+      // The tournament replaces the per-KO NVDA drip (env.rhKoDripEnabled defaults accordingly).
+      awardPrizes: env.rhKoDripEnabled,
+      tourney: this.tourney,
+    });
+
+    this.onMessage('round.state', (client) => {
+      if (this.tourney) client.send('round.state', this.tourney.state());
     });
 
     this.onMessage('move', (client, message: MoveMessage) => {
@@ -197,7 +218,12 @@ export class AarenaRhRoom extends Room<AarenaState> {
     }
     // RH room: no Base subgraph ownership — Nakey / wallet-id / soft cartridge players OK.
     const cartridgeId = String(options.cartridgeId || '').trim();
-    return { address: claims.address, gotchiId, cartridgeId };
+    // Tournament: a claimed cartridge must be the player's own and the hero live (not retired).
+    const check = await verifyRhCartridge(claims.address, gotchiId, cartridgeId);
+    if (!check.ok) {
+      throw new Error(`rh_tourney:${check.reason}`);
+    }
+    return { address: claims.address, gotchiId: check.heroId || gotchiId, cartridgeId, collateral: check.collateral };
   }
 
   onJoin(client: Client, options: JoinOptions, auth?: AuthData) {
@@ -244,6 +270,10 @@ export class AarenaRhRoom extends Room<AarenaState> {
       name: player.name,
       address: player.address,
     });
+    if (this.tourney) {
+      this.tourney.touch({ address: player.address, gotchiId, cartridgeId: player.cartridgeId, agentId: auth?.agentId });
+      client.send('round.state', this.tourney.state());
+    }
     if (auth?.agentId) {
       agentSessionStart(client.sessionId, {
         agentId: auth.agentId,
@@ -270,5 +300,7 @@ export class AarenaRhRoom extends Room<AarenaState> {
   onDispose() {
     this.combat?.dispose();
     this.combat = null;
+    this.tourney?.dispose();
+    this.tourney = null;
   }
 }
